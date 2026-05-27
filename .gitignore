@@ -1,0 +1,13 @@
+﻿# PlatformIO Build-Artefakte und Cache
+.pio/
+
+# VS Code
+.vscode/
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+ESP32-WROOM.code-workspace
+include/config.h
+plan.md
