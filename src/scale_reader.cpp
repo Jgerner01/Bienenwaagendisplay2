@@ -4,11 +4,14 @@
 
 #include "scale_reader.h"
 
-ScaleReader::ScaleReader() : cfg(nullptr), sampleIdx(0), sampleCount(0) {
+ScaleReader::ScaleReader()
+    : cfg(nullptr), sampleIdx(0), sampleCount(0), fastIdx(0), fastCount(0) {
     memset(&data, 0, sizeof(ScaleData));
     memset(sampleBuf, 0, sizeof(sampleBuf));
+    memset(fastBuf,   0, sizeof(fastBuf));
     data.gain                 = HX711_DEFAULT_GAIN;
     data.weightCorrectedKg    = 0.0f;
+    data.fastWeightKg         = 0.0f;
     data.tempCorrectionActive = false;
 }
 
@@ -61,10 +64,18 @@ void ScaleReader::update() {
 
     long net = rawAdc - hx711.get_offset();   // Nettowert nach Tara-Abzug
 
-    // Sample in Ringpuffer schreiben
+    // Sample in Langzeit-Ringpuffer schreiben
     sampleBuf[sampleIdx] = net;
     sampleIdx = (sampleIdx + 1) % SAMPLE_BUF_SIZE;
     if (sampleCount < SAMPLE_BUF_SIZE) sampleCount++;
+
+    // Sample in Schnell-Puffer schreiben + fastWeightKg aktualisieren
+    fastBuf[fastIdx] = net;
+    fastIdx = (fastIdx + 1) % FAST_BUF_SIZE;
+    if (fastCount < FAST_BUF_SIZE) fastCount++;
+    if (data.calibrationFactor != 0.0f) {
+        data.fastWeightKg = (float)computeFastMedian() / data.calibrationFactor;
+    }
 
     data.rawValue   = rawAdc;
     data.hx711Ready = true;
@@ -232,10 +243,22 @@ void ScaleReader::computeStats(long& outMedian, float& outSpread, float& outTrim
     outTrimmedMean = tsum / (float)(hi - lo);
 }
 
+long ScaleReader::computeFastMedian() {
+    if (fastCount == 0) return 0;
+    long tmp[FAST_BUF_SIZE];
+    memcpy(tmp, fastBuf, fastCount * sizeof(long));
+    qsort(tmp, fastCount, sizeof(long), cmpLong);
+    return tmp[fastCount / 2];
+}
+
 void ScaleReader::clearSampleBuffer() {
     memset(sampleBuf, 0, sizeof(sampleBuf));
     sampleIdx   = 0;
     sampleCount = 0;
+    memset(fastBuf, 0, sizeof(fastBuf));
+    fastIdx   = 0;
+    fastCount = 0;
+    data.fastWeightKg = 0.0f;
 }
 
 bool ScaleReader::waitReady(uint16_t timeoutMs) {

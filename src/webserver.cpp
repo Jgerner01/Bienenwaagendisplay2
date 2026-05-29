@@ -25,6 +25,12 @@ static const char JS_LIVE_UPDATE[] PROGMEM =
     "wc.className=d.corrActive?'value ok':'value';"
     "wc.textContent=d.kgCorrected.toFixed(3)+' kg'+(d.corrActive?' *':'');}"
     "else{wc.className='err';wc.textContent='kein gültiger Wert';}}"
+    "var ev=document.getElementById('erv');"
+    "if(ev){if(d.ertragsAktiv){"
+    "ev.className='value ok';"
+    "var s=d.ertragsgewicht>=0?'+':'';"
+    "ev.textContent=s+d.ertragsgewicht.toFixed(3)+' kg';}"
+    "else{ev.className='value';ev.textContent='nicht gesetzt';}}"
     "var t=document.getElementById('tv');"
     "if(t){if(d.tempOk){t.className='value ok';t.textContent=d.tempC.toFixed(2)+'°C';}"
     "else{t.className='err';t.textContent='kein Sensor';}}"
@@ -69,6 +75,7 @@ input[type=text],input[type=password],input[type=number],select{
 WebServerManager::WebServerManager()
     : server(nullptr), dnsServer(nullptr), apMode(false), staConnected(false),
       scaleReaderRef(nullptr), tempSensorRef(nullptr), tempCalRef(nullptr),
+      ertragsAktivRef(nullptr), ertragsOffsetRef(nullptr),
       wifiSaveCb(nullptr), mqttSaveCb(nullptr),
       scaleSaveCb(nullptr), tempCalSaveCb(nullptr),
       tareCb(nullptr), calibrateCb(nullptr),
@@ -286,6 +293,10 @@ void WebServerManager::parseRequest(WiFiClient& client) {
         handleScale(client);
     } else if (path == "/tare" && method == "POST") {
         handleTare(client);
+    } else if (path == "/ertragstara" && method == "POST") {
+        handleErtragsTara(client);
+    } else if (path == "/ertragstara-reset" && method == "POST") {
+        handleErtragsTaraReset(client);
     } else if (path == "/calibrate" && method == "GET") {
         handleCalibratePage(client);
     } else if (path == "/calibrate" && method == "POST") {
@@ -404,6 +415,23 @@ void WebServerManager::handleRoot(WiFiClient& client) {
                 "<span id='wcv' class='" +
                 String(d.tempCorrectionActive ? "value ok" : "value") + "'>" +
                 String(wcbuf) + "</span></div>";
+        // Ertragswert
+        {
+            bool   ea  = ertragsAktivRef  && *ertragsAktivRef;
+            float  eo  = ertragsOffsetRef ? *ertragsOffsetRef : 0.0f;
+            String ecls = ea ? "value ok" : "value";
+            String eval;
+            if (ea) {
+                char ebuf[20];
+                float ev = d.weightCorrectedKg - eo;
+                snprintf(ebuf, sizeof(ebuf), "%+.3f kg", ev);
+                eval = String(ebuf);
+            } else {
+                eval = "nicht gesetzt";
+            }
+            html += "<div class='row'><span class='label'>Ertragswert</span>"
+                    "<span id='erv' class='" + ecls + "'>" + eval + "</span></div>";
+        }
         char sbuf[20];
         snprintf(sbuf, sizeof(sbuf), "%.1f g", d.spreadKg * 1000.0f);
         html += "<div class='row'><span class='label'>&#x03C3; Streuung</span>"
@@ -553,6 +581,38 @@ void WebServerManager::handleScale(WiFiClient& client) {
             "<button class='btn' type='submit'>&#x2295; Tara setzen</button>"
             "</form></div>";
 
+    // Ertragsmessung
+    {
+        bool  ea = ertragsAktivRef  && *ertragsAktivRef;
+        float eo = ertragsOffsetRef ? *ertragsOffsetRef : 0.0f;
+        html += "<div class='card'><h2>&#x1F4C8; Ertragsmessung</h2>";
+        if (ea && d.isValid) {
+            char ebuf[24];
+            snprintf(ebuf, sizeof(ebuf), "%+.3f kg", d.weightCorrectedKg - eo);
+            html += "<div class='row'><span class='label'>Ertragswert</span>"
+                    "<span id='erv2' class='value ok'>" + String(ebuf) + "</span></div>";
+            char obuf[24];
+            snprintf(obuf, sizeof(obuf), "%.3f kg", eo);
+            html += "<div class='row'><span class='label'>Referenz (gesetzt bei)</span>"
+                    "<span class='value'>" + String(obuf) + "</span></div>";
+        } else {
+            html += "<div class='row'><span class='label'>Ertragswert</span>"
+                    "<span id='erv2' class='value'>nicht gesetzt</span></div>";
+        }
+        html += "<p style='font-size:.88em;color:#666;margin:6px 0'>"
+                "Setzt das aktuelle korrigierte Gewicht als Ertragsbasis.<br>"
+                "Der Ertragswert zeigt die Ver&auml;nderung seit diesem Zeitpunkt.</p>"
+                "<form method='post' action='/ertragstara'>"
+                "<button class='btn' type='submit'>&#x1F4CC; Ertragsbasis jetzt setzen</button>"
+                "</form>";
+        if (ea) {
+            html += "<form method='post' action='/ertragstara-reset'>"
+                    "<button class='btn grey' type='submit'>&#x274C; Ertragsmessung zur&uuml;cksetzen</button>"
+                    "</form>";
+        }
+        html += "</div>";
+    }
+
     html += "<a class='back' href='/'>&#x2190; Zur&uuml;ck</a>";
     html += FPSTR(JS_LIVE_UPDATE);
     html += HTML_END;
@@ -571,6 +631,33 @@ void WebServerManager::handleTare(WiFiClient& client) {
             "<div class='card'><p class='ok'>Nullpunkt wurde gesetzt.</p></div>"
             "<div class='card'><meta http-equiv='refresh' content='2;url=/scale'>"
             "<a class='back' href='/scale'>&#x2190; Zur&uuml;ck</a></div>";
+    html += HTML_END;
+    sendHtml(client, 200, html);
+}
+
+void WebServerManager::handleErtragsTara(WiFiClient& client) {
+    if (ertragsAktivRef && ertragsOffsetRef && scaleReaderRef) {
+        *ertragsOffsetRef = scaleReaderRef->getData().weightCorrectedKg;
+        *ertragsAktivRef  = true;
+        DEBUG_PRINTF("[Web] Ertragstara gesetzt: %.3f kg\n", *ertragsOffsetRef);
+    }
+    String html = htmlHead("Ertragsmessung");
+    html += "<h1>&#x1F4C8; Ertragsbasis gesetzt</h1>"
+            "<div class='card'><p class='ok'>Ertragsbasis wurde auf das aktuelle Gewicht gesetzt.</p></div>"
+            "<meta http-equiv='refresh' content='2;url=/scale'>"
+            "<a class='back' href='/scale'>&#x2190; Zur&uuml;ck</a>";
+    html += HTML_END;
+    sendHtml(client, 200, html);
+}
+
+void WebServerManager::handleErtragsTaraReset(WiFiClient& client) {
+    if (ertragsAktivRef) *ertragsAktivRef = false;
+    DEBUG_PRINTLN("[Web] Ertragsmessung zurückgesetzt");
+    String html = htmlHead("Ertragsmessung");
+    html += "<h1>Ertragsmessung zur&uuml;ckgesetzt</h1>"
+            "<div class='card'><p class='ok'>Ertragsmessung wurde deaktiviert.</p></div>"
+            "<meta http-equiv='refresh' content='2;url=/scale'>"
+            "<a class='back' href='/scale'>&#x2190; Zur&uuml;ck</a>";
     html += HTML_END;
     sendHtml(client, 200, html);
 }
@@ -1171,6 +1258,18 @@ void WebServerManager::handleApiData(WiFiClient& client) {
         }
     } else {
         json += F("0,\"tempOk\":false");
+    }
+
+    // Ertragswert
+    bool  ea = ertragsAktivRef  && *ertragsAktivRef;
+    float eo = ertragsOffsetRef ? *ertragsOffsetRef : 0.0f;
+    json += F(",\"ertragsAktiv\":");
+    json += ea ? F("true") : F("false");
+    json += F(",\"ertragsgewicht\":");
+    {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%.3f", ea ? (d.weightCorrectedKg - eo) : 0.0f);
+        json += buf;
     }
     json += F("}");
 

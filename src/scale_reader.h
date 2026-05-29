@@ -22,6 +22,7 @@ struct ScaleData {
     float         weightCorrectedKg;   // Temperaturkorrigiertes Gewicht
     float         trimmedMeanKg;       // Getrimmter Mittelwert (je 5 Ausreißer entfernt) in kg
     float         spreadKg;            // Standardabweichung aller Samples in kg
+    float         fastWeightKg;        // Schnell-Median (SCHNELL_SAMPLES, ~1 s Fenster)
     long          rawValue;
     long          offset;
     float         calibrationFactor;
@@ -73,8 +74,15 @@ private:
     uint16_t sampleIdx;
     uint16_t sampleCount;
 
+    // Schnell-Puffer für Schnellmessung
+    static const uint8_t FAST_BUF_SIZE = SCHNELL_SAMPLES;
+    long     fastBuf[FAST_BUF_SIZE];
+    uint8_t  fastIdx;
+    uint8_t  fastCount;
+
     // Berechnet Median, Standardabweichung und Trimmed Mean (in Roheinheiten)
     void computeStats(long& outMedian, float& outSpread, float& outTrimmedMean);
+    long computeFastMedian();
     void clearSampleBuffer();
     // Wartet bis is_ready() true ist, maximal timeoutMs Millisekunden.
     // Gibt true zurück wenn HX711 bereit, false bei Timeout.

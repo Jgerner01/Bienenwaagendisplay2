@@ -29,6 +29,7 @@ public:
     // Messdaten veröffentlichen
     void publishScaleData(const ScaleData& data);
     void publishTempData(const TempData& data);
+    void publishErtragsData(float ertragsKg);
 
     // Home Assistant Auto-Discovery senden
     void sendDiscoveryConfig();

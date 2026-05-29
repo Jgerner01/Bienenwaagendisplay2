@@ -13,6 +13,12 @@
 #include "scale_reader.h"
 #include "temp_sensor.h"
 
+enum class DisplayMode {
+    NORMAL,           // Temp + normales Gewicht (oder Ertragswert wenn gesetzt)
+    SCHNELLMESSUNG,   // Temp + Schnellmessung-Wert (2 Hz)
+    CONFIRM_ERTRAG    // Bestätigungsanzeige für Ertragsmessung-Tara (5-s-Fenster)
+};
+
 class DisplayManager {
 public:
     DisplayManager();
@@ -21,7 +27,14 @@ public:
     void begin();
 
     // Anzeige aktualisieren (im loop aufrufen)
-    void update(const ScaleData& scaleData, const TempData& tempData);
+    // ertragsWert: berechneter Ertrag (currentKg - ertragsOffset), NaN wenn nicht gesetzt
+    // schnellWert: Schnellmessungs-Wert (currentFastKg - schnellOffset)
+    // confirmSecsLeft: verbleibende Sekunden im Bestätigungsfenster (0 = kein Fenster)
+    void update(const ScaleData& scaleData, const TempData& tempData,
+                DisplayMode mode,
+                float ertragsWert, bool ertragsAktiv,
+                float schnellWert,
+                uint8_t confirmSecsLeft);
 
     void setIpAddress(const String& ip);
     void setApMode(bool apMode);
@@ -33,14 +46,16 @@ private:
     LiquidCrystal_I2C* lcd;
     String   ipAddress;
     bool     apMode;
-    bool     showingIp;             // true = IP-Anzeige aktiv
-    unsigned long startTime;        // millis() bei begin()
-    unsigned long lastWeightUpdate; // Zeitstempel letzte Gewichtsanzeige
+    bool     showingIp;
+    unsigned long startTime;
+    unsigned long lastWeightUpdate;
 
     void showIp();
     void showWeight(float kg, bool weightValid, float tempC, bool tempValid);
+    void showErtrag(float ertragsWert, float tempC, bool tempValid);
+    void showSchnell(float schnellWert);
+    void showConfirm(uint8_t secsLeft);
 
-    // Hilfsfunktion: String auf LCD-Breite padden/kürzen
     String padLine(const String& s, uint8_t width = LCD_COLS);
 };
 

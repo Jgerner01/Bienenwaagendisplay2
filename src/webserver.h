@@ -45,6 +45,7 @@ public:
     void setTempSensor(TempSensor* ts)                    { tempSensorRef = ts; }
     void setTempCalConfig(TempCalConfig* cfg)             { tempCalRef = cfg; }
     void setTempCalSaveCallback(TempCalSaveCallback cb)   { tempCalSaveCb = cb; }
+    void setErtragsRef(bool* aktiv, float* offset)        { ertragsAktivRef = aktiv; ertragsOffsetRef = offset; }
 
     // staConnected = STA verbunden; apMode = AP noch aktiv (auch während AP+STA)
     bool   isApMode()    const { return apMode && !staConnected; }
@@ -60,6 +61,8 @@ private:
     ScaleReader*        scaleReaderRef;
     TempSensor*         tempSensorRef;
     TempCalConfig*      tempCalRef;
+    bool*               ertragsAktivRef;
+    float*              ertragsOffsetRef;
     WifiSaveCallback    wifiSaveCb;
     MqttSaveCallback    mqttSaveCb;
     ScaleSaveCallback   scaleSaveCb;
@@ -81,6 +84,8 @@ private:
     void handleRoot(WiFiClient& client);
     void handleScale(WiFiClient& client);
     void handleTare(WiFiClient& client);
+    void handleErtragsTara(WiFiClient& client);
+    void handleErtragsTaraReset(WiFiClient& client);
     void handleCalibratePage(WiFiClient& client);
     void handleCalibratePost(WiFiClient& client, const String& body);
     void handleResetScale(WiFiClient& client);

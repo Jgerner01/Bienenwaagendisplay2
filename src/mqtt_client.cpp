@@ -180,6 +180,18 @@ void MqttClientManager::publishTempData(const TempData& data) {
     mqttClient->publish(topic.c_str(), payload, MQTT_RETAIN);
 }
 
+void MqttClientManager::publishErtragsData(float ertragsKg) {
+    if (!connected || !mqttClient) return;
+
+    String topic = String(mqttConfig.topicPrefix) + "/sensors/ertragsgewicht";
+    char   payload[48];
+    snprintf(payload, sizeof(payload),
+             "{\"value\":%.3f,\"unit\":\"kg\",\"ts\":%lu}",
+             ertragsKg, millis() / 1000UL);
+    mqttClient->publish(topic.c_str(), payload, MQTT_RETAIN);
+    DEBUG_PRINTF("[MQTT] Ertragsgewicht: %.3f kg\n", ertragsKg);
+}
+
 // ============================================================
 // HOME ASSISTANT AUTO-DISCOVERY
 // ============================================================
@@ -208,6 +220,8 @@ void MqttClientManager::sendDiscoveryConfig() {
                         nullptr,             "measurement", "", "mdi:function-variant");
     sendSensorDiscovery("gain",              "HX711 Gain",
                         nullptr,             "measurement", "", "mdi:tune");
+    sendSensorDiscovery("ertragsgewicht",    "Bienenstock Ertrag",
+                        nullptr,             "measurement", "kg", "mdi:trending-up");
 
     DEBUG_PRINTF("[MQTT] Vor Button/Number Discovery, connected=%d heap=%d\n",
                  mqttClient->connected(), ESP.getFreeHeap());

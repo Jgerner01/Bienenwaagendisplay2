@@ -76,6 +76,23 @@
 #define CONFIG_FILE_TEMPCAL "/tempcal.json"
 
 // ============================================================
+// TASTER (D8 / GPIO15)
+// ============================================================
+// GPIO15 ist Strapping-Pin: muss beim Boot LOW sein (externer 10k Pull-Down).
+// Taster verbindet GPIO15 mit 3,3V → aktiv HIGH.
+#define BUTTON_PIN              15      // D8 (GPIO15), aktiv HIGH
+#define BUTTON_ACTIVE_HIGH      1       // 1 = aktiv HIGH, 0 = aktiv LOW
+#define BUTTON_DEBOUNCE_MS      50      // Entprellzeit
+#define BUTTON_LONG_PRESS_MS    5000UL  // Haltedauer für Ertragsmessung-Tara
+#define BUTTON_CONFIRM_WINDOW_MS 5000UL // Bestätigungsfenster nach Loslassen
+
+// ============================================================
+// SCHNELLMESSUNG
+// ============================================================
+#define SCHNELL_SAMPLES         10      // Median-Fenstergröße (~1 s bei 10 SPS)
+#define SCHNELL_DISPLAY_INTERVAL_MS 500UL  // 2 Hz Display-Update
+
+// ============================================================
 // DEBUG
 // ============================================================
 #define DEBUG_PRINTLN(x)    Serial.println(x)

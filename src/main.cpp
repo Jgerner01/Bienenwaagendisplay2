@@ -8,6 +8,7 @@
  *   D2 (GPIO4)  – DS18B20 (OneWire, 4,7k Pull-up nach 3,3V)
  *   D3 (GPIO0)  – CK   (HX711, Strapping-Pin: HIGH beim Boot)
  *   D4 (GPIO2)  – DO   (HX711, Strapping-Pin: HIGH beim Boot)
+ *   D8  (GPIO15)– Taster (aktiv HIGH, 3,3V beim Drücken, 10k Pull-Down nach GND)
  *
  * WiFi-Einrichtung:
  * - Erster Start: AP-Mode "Bienenwaage" (PW: 12345678) → 192.168.4.1
@@ -26,6 +27,7 @@
 #include "webserver.h"
 #include "mqtt_client.h"
 #include "temp_cal.h"
+#include "button_handler.h"
 
 // ============================================================
 // GLOBALE OBJEKTE
@@ -37,6 +39,7 @@ static DisplayManager    displayMgr;
 static ConfigManager     configMgr;
 static WebServerManager  webServer;
 static MqttClientManager mqttClient;
+static ButtonHandler     button;
 
 static WifiConfig    wifiConfig;
 static MqttConfig    mqttConfig;
@@ -46,6 +49,15 @@ static TempCalConfig tempCalConfig;
 static bool          mqttEnabled        = false;
 static unsigned long lastMqttPublish    = 0;
 static bool          wifiWasConnected   = false;
+
+// ============================================================
+// ERTRAGSMESSUNG / SCHNELLMESSUNG
+// ============================================================
+
+static DisplayMode   displayMode      = DisplayMode::NORMAL;
+static bool          ertragsAktiv     = false;   // Ertragstara gesetzt?
+static float         ertragsOffset    = 0.0f;    // korrigiertes Gewicht zum Zeitpunkt der Ertragstarierung
+static float         schnellOffset    = 0.0f;    // fastWeightKg zum Zeitpunkt der Schnellmessung-Tara
 
 // ============================================================
 // CALLBACKS
@@ -74,7 +86,7 @@ void onScaleSave(const ScaleConfig& config) {
 
 void onTare() {
     scaleReader.tare();
-    configMgr.saveScaleConfig(scaleConfig);   // offset wurde intern in scaleConfig gesetzt
+    configMgr.saveScaleConfig(scaleConfig);
 }
 
 bool onCalibrate(float knownKg) {
@@ -123,7 +135,13 @@ void checkMqttPublish() {
         const TempData&  td = tempSensor.getData();
         DEBUG_PRINTF("[MQTT] Publish: hx711Ready=%d isValid=%d weight=%.3f\n",
                      sd.hx711Ready, sd.isValid, sd.weightKg);
-        if (sd.hx711Ready) mqttClient.publishScaleData(sd);
+        if (sd.hx711Ready) {
+            mqttClient.publishScaleData(sd);
+            if (ertragsAktiv) {
+                float ertragsWert = sd.weightCorrectedKg - ertragsOffset;
+                mqttClient.publishErtragsData(ertragsWert);
+            }
+        }
         mqttClient.publishTempData(td);
         lastMqttPublish = millis();
     }
@@ -189,6 +207,9 @@ void setup() {
     // DS18B20 initialisieren
     tempSensor.begin();
 
+    // Taster initialisieren
+    button.begin();
+
     // WebServer + WiFi starten
     webServer.setWifiSaveCallback(onWifiSave);
     webServer.setMqttSaveCallback(onMqttSave);
@@ -200,6 +221,7 @@ void setup() {
     webServer.setTempSensor(&tempSensor);
     webServer.setTempCalConfig(&tempCalConfig);
     webServer.setTempCalSaveCallback(onTempCalSave);
+    webServer.setErtragsRef(&ertragsAktiv, &ertragsOffset);
 
     mqttClient.setTareCallback(onMqttTare);
     mqttClient.setCalibrateCallback(onMqttCalibrate);
@@ -210,10 +232,8 @@ void setup() {
         wifiWasConnected = true;
         DEBUG_PRINTF("[WiFi] STA: %s\n", webServer.getIp().c_str());
 
-        // OTA nur im STA-Mode sinnvoll
         setupOta();
 
-        // MQTT starten
         if (mqttEnabled && strlen(mqttConfig.broker) > 0) {
             mqttClient.begin(mqttConfig);
             mqttClient.setStatusCallback(onMqttStatusChange);
@@ -251,10 +271,46 @@ void loop() {
         }
     }
 
-    // 3. WebServer / WiFi
+    // 3. Taster auswerten
+    {
+        ButtonEvent ev = button.update();
+        const ScaleData& sd = scaleReader.getData();
+
+        if (ev == ButtonEvent::SHORT_PRESS) {
+            if (displayMode == DisplayMode::SCHNELLMESSUNG) {
+                // Schnellmessung beenden
+                displayMode = DisplayMode::NORMAL;
+                DEBUG_PRINTLN("[Button] Schnellmessung beendet");
+                displayMgr.showMessage("Schnellmessung", "beendet");
+            } else {
+                // Schnellmessung starten: Schnell-Tara setzen
+                schnellOffset = sd.fastWeightKg;
+                displayMode   = DisplayMode::SCHNELLMESSUNG;
+                DEBUG_PRINTF("[Button] Schnellmessung gestartet, offset=%.3f\n", schnellOffset);
+                displayMgr.showMessage("Schnellmessung", "gestartet");
+            }
+        } else if (ev == ButtonEvent::LONG_HELD) {
+            // Bestätigungsfenster öffnen
+            displayMode = DisplayMode::CONFIRM_ERTRAG;
+            DEBUG_PRINTLN("[Button] Bestaetigungsfenster offen");
+        } else if (ev == ButtonEvent::CONFIRM) {
+            // Ertragstara setzen
+            ertragsOffset = sd.weightCorrectedKg;
+            ertragsAktiv  = true;
+            displayMode   = DisplayMode::NORMAL;
+            DEBUG_PRINTF("[Button] Ertragsmessung tariert: offset=%.3f\n", ertragsOffset);
+            displayMgr.showMessage("Ertragsmessung", "Tariert!");
+        } else if (ev == ButtonEvent::CONFIRM_TIMEOUT) {
+            // Abbruch
+            displayMode = DisplayMode::NORMAL;
+            DEBUG_PRINTLN("[Button] Bestaetigung abgelaufen, abgebrochen");
+        }
+    }
+
+    // 4. WebServer / WiFi
     webServer.loop();
 
-    // 4. WiFi-Status nachverfolgen
+    // 5. WiFi-Status nachverfolgen
     if (webServer.isConnected() && !wifiWasConnected) {
         wifiWasConnected = true;
         setupOta();
@@ -265,16 +321,23 @@ void loop() {
         }
     }
 
-    // 5. Display aktualisieren
-    displayMgr.update(scaleReader.getData(), tempSensor.getData());
+    // 6. Display aktualisieren
+    {
+        const ScaleData& sd = scaleReader.getData();
+        const TempData&  td = tempSensor.getData();
+        float ertragsWert   = ertragsAktiv ? (sd.weightCorrectedKg - ertragsOffset) : 0.0f;
+        float schnellWert   = sd.fastWeightKg - schnellOffset;
+        uint8_t confirmSecs = (uint8_t)((button.confirmWindowRemaining() + 999UL) / 1000UL);
+        displayMgr.update(sd, td, displayMode, ertragsWert, ertragsAktiv, schnellWert, confirmSecs);
+    }
 
-    // 6. MQTT
+    // 7. MQTT
     if (mqttEnabled) {
         mqttClient.loop();
         checkMqttPublish();
     }
 
-    // 7. Debug alle 10 s
+    // 8. Debug alle 10 s
     static unsigned long lastDebug = 0;
     if (millis() - lastDebug > 10000UL) {
         const ScaleData& d = scaleReader.getData();
