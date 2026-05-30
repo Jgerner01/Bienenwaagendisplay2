@@ -19,12 +19,17 @@ static const char JS_LIVE_UPDATE[] PROGMEM =
     "fetch('/api/data').then(function(r){return r.json();}).then(function(d){"
     "var w=document.getElementById('wv');"
     "if(w){if(d.kgOk){w.className='value ok';w.textContent=d.kg.toFixed(3)+' kg';}"
-    "else{w.className='err';w.textContent='kein gültiger Wert';}}"
+    "else{w.className='err';w.textContent='kein g\xc3\xbcltiger Wert';}}"
+    "var wt=document.getElementById('wtcv');"
+    "if(wt){if(d.kgOk){"
+    "wt.className=d.corrActive?'value ok':'value';"
+    "wt.textContent=d.kgTCorrected.toFixed(3)+' kg'+(d.corrActive?' *':'');}"
+    "else{wt.className='err';wt.textContent='kein g\xc3\xbcltiger Wert';}}"
     "var wc=document.getElementById('wcv');"
     "if(wc){if(d.kgOk){"
     "wc.className=d.corrActive?'value ok':'value';"
-    "wc.textContent=d.kgCorrected.toFixed(3)+' kg'+(d.corrActive?' *':'');}"
-    "else{wc.className='err';wc.textContent='kein gültiger Wert';}}"
+    "wc.textContent=d.kgCorrected.toFixed(3)+' kg'+(d.corrActive?' **':'');}"
+    "else{wc.className='err';wc.textContent='kein g\xc3\xbcltiger Wert';}}"
     "var ev=document.getElementById('erv');"
     "if(ev){if(d.ertragsAktiv){"
     "ev.className='value ok';"
@@ -32,7 +37,7 @@ static const char JS_LIVE_UPDATE[] PROGMEM =
     "ev.textContent=s+d.ertragsgewicht.toFixed(3)+' kg';}"
     "else{ev.className='value';ev.textContent='nicht gesetzt';}}"
     "var t=document.getElementById('tv');"
-    "if(t){if(d.tempOk){t.className='value ok';t.textContent=d.tempC.toFixed(2)+'°C';}"
+    "if(t){if(d.tempOk){t.className='value ok';t.textContent=d.tempC.toFixed(2)+'\xc2\xb0\x43';}"
     "else{t.className='err';t.textContent='kein Sensor';}}"
     "var r=document.getElementById('rv');"
     "if(r){r.textContent=d.raw;}"
@@ -323,6 +328,8 @@ void WebServerManager::parseRequest(WiFiClient& client) {
         handleParamsPT2CalPost(client, body);
     } else if (path == "/tempcal") {
         handleTempCalPage(client);
+    } else if (path == "/pt2cal") {
+        handlePT2CalPage(client);
     } else if (path == "/api/tempcal" && method == "GET") {
         handleTempCalApiGet(client);
     } else if (path == "/api/tempcal" && method == "POST") {
@@ -412,10 +419,17 @@ void WebServerManager::handleRoot(WiFiClient& client) {
         snprintf(wbuf, sizeof(wbuf), "%.3f kg", d.weightKg);
         html += "<div class='row'><span class='label'>Gewicht (roh)</span>"
                 "<span id='wv' class='value ok'>" + String(wbuf) + "</span></div>";
+        char wtbuf[24];
+        snprintf(wtbuf, sizeof(wtbuf), "%.3f kg%s",
+                 d.weightTCorrectedKg, d.tempCorrectionActive ? " *" : "");
+        html += "<div class='row'><span class='label'>Gewicht (T-korr.)</span>"
+                "<span id='wtcv' class='" +
+                String(d.tempCorrectionActive ? "value ok" : "value") + "'>" +
+                String(wtbuf) + "</span></div>";
         char wcbuf[24];
         snprintf(wcbuf, sizeof(wcbuf), "%.3f kg%s",
-                 d.weightCorrectedKg, d.tempCorrectionActive ? " *" : "");
-        html += "<div class='row'><span class='label'>Gewicht (korrigiert)</span>"
+                 d.weightCorrectedKg, d.tempCorrectionActive ? " **" : "");
+        html += "<div class='row'><span class='label'>Gewicht (T+PT2-korr.)</span>"
                 "<span id='wcv' class='" +
                 String(d.tempCorrectionActive ? "value ok" : "value") + "'>" +
                 String(wcbuf) + "</span></div>";
@@ -447,7 +461,9 @@ void WebServerManager::handleRoot(WiFiClient& client) {
     } else {
         html += "<div class='row'><span class='label'>Gewicht (roh)</span>"
                 "<span id='wv' class='err'>kein g&uuml;ltiger Wert</span></div>";
-        html += "<div class='row'><span class='label'>Gewicht (korrigiert)</span>"
+        html += "<div class='row'><span class='label'>Gewicht (T-korr.)</span>"
+                "<span id='wtcv' class='err'>kein g&uuml;ltiger Wert</span></div>";
+        html += "<div class='row'><span class='label'>Gewicht (T+PT2-korr.)</span>"
                 "<span id='wcv' class='err'>kein g&uuml;ltiger Wert</span></div>";
         html += "<div class='row'><span class='label'>&#x03C3; Streuung</span>"
                 "<span id='sv' class='value'>-</span></div>";
@@ -1239,6 +1255,12 @@ void WebServerManager::handleApiData(WiFiClient& client) {
         snprintf(buf, sizeof(buf), "%.4f", d.spreadKg);
         json += buf;
     }
+    json += F(",\"kgTCorrected\":");
+    {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%.3f", d.weightTCorrectedKg);
+        json += buf;
+    }
     json += F(",\"kgCorrected\":");
     {
         char buf[16];
@@ -1279,6 +1301,272 @@ void WebServerManager::handleApiData(WiFiClient& client) {
     json += F("}");
 
     sendJson(client, json);
+}
+
+// ============================================================
+// SEITE: /pt2cal – PT2-Fit-Wizard
+// ============================================================
+
+static const char PT2CAL_JS[] PROGMEM = R"js(
+<script>
+var wData=[],tData=[],coeff=null,t2Val=240,dVal=0.7;
+function readFile(id,cb){
+  var f=document.getElementById(id).files[0];
+  if(!f){cb(null);return;}
+  var r=new FileReader();
+  r.onload=function(e){cb(e.target.result);};
+  r.readAsText(f);
+}
+function parseCSV(txt){
+  var lines=txt.trim().split(/\r?\n/);
+  if(lines.length<2)return[];
+  var sep=lines[0].indexOf(';')>=0?';':',';
+  var hi=-1,vi=-1;
+  var h0=lines[0].split(sep);
+  for(var i=0;i<h0.length;i++){
+    var c=h0[i].replace(/"/g,'').trim().toLowerCase();
+    if(c==='last_changed'||c.indexOf('time')>=0||c.indexOf('datum')>=0)hi=i;
+    if(c==='state'||c.indexOf('value')>=0||c.indexOf('wert')>=0||c.indexOf('kg')>=0||c.indexOf('temp')>=0||c.indexOf('°c')>=0)vi=i;
+  }
+  if(hi<0)hi=0;if(vi<0)vi=1;
+  var out=[];
+  for(var i=1;i<lines.length;i++){
+    var p=lines[i].split(sep);
+    if(p.length<2)continue;
+    var ts=p[hi].replace(/"/g,'').trim();
+    var vs=p[vi].replace(/"/g,'').trim();
+    var ms=isNaN(Number(ts))?new Date(ts).getTime():Number(ts)*1000;
+    var v=parseFloat(vs);
+    if(isNaN(ms)||isNaN(v))continue;
+    out.push({ms:ms,val:v});
+  }
+  out.sort(function(a,b){return a.ms-b.ms;});
+  return out;
+}
+function interp(arr,ms){
+  if(arr.length===0)return null;
+  if(ms<=arr[0].ms)return arr[0].val;
+  if(ms>=arr[arr.length-1].ms)return arr[arr.length-1].val;
+  for(var i=1;i<arr.length;i++){
+    if(arr[i].ms>=ms){
+      var t=(ms-arr[i-1].ms)/(arr[i].ms-arr[i-1].ms);
+      return arr[i-1].val+t*(arr[i].val-arr[i-1].val);
+    }
+  }
+  return null;
+}
+function applyPT2(tSeries,T2_min,D){
+  if(tSeries.length===0)return[];
+  var wn=1.0/(T2_min*60.0),wn2=wn*wn;
+  var x1=tSeries[0].val,x2=0.0;
+  var out=[{ms:tSeries[0].ms,val:x1}];
+  for(var i=1;i<tSeries.length;i++){
+    var dt=(tSeries[i].ms-tSeries[i-1].ms)/1000.0;
+    if(dt>60.0)dt=60.0;
+    if(dt<=0.0){out.push({ms:tSeries[i].ms,val:x1});continue;}
+    var x1n=x1+dt*x2;
+    var x2n=x2+dt*(wn2*(tSeries[i].val-x1)-2.0*D*wn*x2);
+    x1=x1n;x2=x2n;
+    out.push({ms:tSeries[i].ms,val:x1});
+  }
+  return out;
+}
+function fitPoly(pairs){
+  var n=pairs.length;
+  if(n<3)return null;
+  var S0=0,S1=0,S2=0,S3=0,S4=0,R0=0,R1=0,R2=0;
+  for(var i=0;i<n;i++){
+    var t=pairs[i].t,r=pairs[i].r;
+    S0+=1;S1+=t;S2+=t*t;S3+=t*t*t;S4+=t*t*t*t;
+    R0+=r;R1+=r*t;R2+=r*t*t;
+  }
+  var A=[[S4,S3,S2],[S3,S2,S1],[S2,S1,S0]];
+  var b=[R2,R1,R0];
+  for(var col=0;col<3;col++){
+    var mx=col;
+    for(var row=col+1;row<3;row++)if(Math.abs(A[row][col])>Math.abs(A[mx][col]))mx=row;
+    var tmp=A[col];A[col]=A[mx];A[mx]=tmp;var tb=b[col];b[col]=b[mx];b[mx]=tb;
+    if(Math.abs(A[col][col])<1e-12)return null;
+    for(var row2=col+1;row2<3;row2++){
+      var f=A[row2][col]/A[col][col];
+      for(var k=col;k<3;k++)A[row2][k]-=f*A[col][k];
+      b[row2]-=f*b[col];
+    }
+  }
+  var x=[0,0,0];
+  for(var i=2;i>=0;i--){
+    x[i]=b[i];
+    for(var j=i+1;j<3;j++)x[i]-=A[i][j]*x[j];
+    x[i]/=A[i][i];
+  }
+  return{a:x[0],b:x[1],c:x[2]};
+}
+function rSq(pairs,cf){
+  var mean=0;
+  for(var i=0;i<pairs.length;i++)mean+=pairs[i].r;
+  mean/=pairs.length;
+  var ss=0,sr=0;
+  for(var i=0;i<pairs.length;i++){
+    var pred=cf.a*pairs[i].t*pairs[i].t+cf.b*pairs[i].t+cf.c;
+    sr+=(pairs[i].r-pred)*(pairs[i].r-pred);
+    ss+=(pairs[i].r-mean)*(pairs[i].r-mean);
+  }
+  return ss>0?1-sr/ss:0;
+}
+function drawPlot(pairs,cf){
+  var cv=document.getElementById('plot');if(!cv)return;
+  var W=cv.width,H=cv.height,pad=28;
+  var ctx=cv.getContext('2d');ctx.clearRect(0,0,W,H);
+  var tMin=pairs[0].t,tMax=pairs[0].t,rMin=pairs[0].r,rMax=pairs[0].r;
+  for(var i=1;i<pairs.length;i++){
+    if(pairs[i].t<tMin)tMin=pairs[i].t;if(pairs[i].t>tMax)tMax=pairs[i].t;
+    if(pairs[i].r<rMin)rMin=pairs[i].r;if(pairs[i].r>rMax)rMax=pairs[i].r;
+  }
+  if(tMax===tMin)tMax=tMin+1;if(rMax===rMin)rMax=rMin+0.1;
+  var px=function(t){return pad+(t-tMin)/(tMax-tMin)*(W-2*pad);};
+  var py=function(r){return H-pad-(r-rMin)/(rMax-rMin)*(H-2*pad);};
+  if(rMin<0&&rMax>0){
+    ctx.setLineDash([4,3]);ctx.strokeStyle='#ddd';
+    ctx.beginPath();ctx.moveTo(pad,py(0));ctx.lineTo(W-pad,py(0));ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.fillStyle='#e6a817';
+  for(var i=0;i<pairs.length;i++){
+    ctx.beginPath();ctx.arc(px(pairs[i].t),py(pairs[i].r),3,0,2*Math.PI);ctx.fill();
+  }
+  if(cf){
+    ctx.strokeStyle='#2980b9';ctx.lineWidth=2;ctx.beginPath();
+    for(var s=0;s<=60;s++){
+      var t=tMin+(tMax-tMin)*s/60;
+      var r=cf.a*t*t+cf.b*t+cf.c;
+      if(s===0)ctx.moveTo(px(t),py(r));else ctx.lineTo(px(t),py(r));
+    }
+    ctx.stroke();
+  }
+  ctx.fillStyle='#666';ctx.font='10px sans-serif';ctx.textAlign='center';
+  ctx.fillText(tMin.toFixed(1),pad,H-4);ctx.fillText(tMax.toFixed(1),W-pad,H-4);
+  ctx.fillText('T_pt2 [C]',W/2,H-2);
+}
+function calculate(){
+  t2Val=parseFloat(document.getElementById('t2in').value)||240;
+  dVal =parseFloat(document.getElementById('din').value)||0.7;
+  readFile('wf',function(wt){
+    if(!wt){alert('Bitte Gewicht-CSV auswaehlen');return;}
+    readFile('tf',function(tt){
+      if(!tt){alert('Bitte Temperatur-CSV auswaehlen');return;}
+      wData=parseCSV(wt);tData=parseCSV(tt);
+      if(wData.length<3){alert('Gewicht-CSV: weniger als 3 Zeilen gueltige Daten');return;}
+      if(tData.length<2){alert('Temperatur-CSV: weniger als 2 Zeilen gueltige Daten');return;}
+      var tPT2=applyPT2(tData,t2Val,dVal);
+      var pairs=[];
+      for(var i=0;i<wData.length;i++){
+        var T=interp(tPT2,wData[i].ms);
+        if(T===null)continue;
+        pairs.push({t:T,r:wData[i].val,ms:wData[i].ms});
+      }
+      if(pairs.length<3){alert('Zu wenig ueberlappende Zeitbereiche');return;}
+      var mean=0;for(var i=0;i<pairs.length;i++)mean+=pairs[i].r;mean/=pairs.length;
+      for(var i=0;i<pairs.length;i++)pairs[i].r-=mean;
+      coeff=fitPoly(pairs);
+      if(!coeff){alert('Gleichungssystem nicht loesbar');return;}
+      var r2=rSq(pairs,coeff);
+      document.getElementById('res').style.display='block';
+      document.getElementById('ca').textContent=coeff.a.toFixed(8);
+      document.getElementById('cb').textContent=coeff.b.toFixed(8);
+      document.getElementById('cc').textContent=coeff.c.toFixed(6);
+      document.getElementById('cr2').textContent=(r2*100).toFixed(2)+'%';
+      document.getElementById('cn').textContent=pairs.length+' Wertepaare';
+      drawPlot(pairs,coeff);
+    });
+  });
+}
+function saveCoeff(){
+  if(!coeff){alert('Zuerst berechnen');return;}
+  var en=document.getElementById('enSel').value==='1';
+  fetch('/api/pt2cal',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({T2_min:t2Val,D:dVal,a:coeff.a,b:coeff.b,c:coeff.c,enabled:en})
+  }).then(function(r){return r.json();}).then(function(d){
+    if(d.ok)alert('Gespeichert!');else alert('Fehler beim Speichern');
+  }).catch(function(){alert('Netzwerkfehler');});
+}
+window.onload=function(){
+  fetch('/api/pt2cal').then(function(r){return r.json();}).then(function(d){
+    var st=document.getElementById('curState');
+    if(st){
+      st.innerHTML=(d.enabled?'<span class="ok">aktiv</span>':'<span>inaktiv</span>')+
+        ' &nbsp; T2='+d.T2_min.toFixed(0)+'min D='+d.D.toFixed(3)+
+        ' a='+d.a.toFixed(8)+' b='+d.b.toFixed(8)+' c='+d.c.toFixed(6);
+    }
+    document.getElementById('t2in').value=d.T2_min.toFixed(0);
+    document.getElementById('din').value=d.D.toFixed(3);
+  }).catch(function(){});
+};
+</script>
+)js";
+
+void WebServerManager::handlePT2CalPage(WiFiClient& client) {
+    String html = htmlHead("PT2 Korrektur");
+    html += F("<h1>&#x23F3; PT2 Korrektur (Stufe 2)</h1>");
+
+    html += F("<div class='card'><h2>Aktueller Status</h2>"
+              "<div id='curState' class='row'>Lade...</div></div>");
+
+    html += F("<div class='card'><h2>Anleitung</h2>"
+              "<ol>"
+              "<li>Messe &uuml;ber mehrere Stunden/Tage bei <strong>konstantem Gewicht</strong>.</li>"
+              "<li>Exportiere zwei CSV-Dateien: Gewicht und Temperatur.</li>"
+              "<li>W&auml;hle T&sub2; und D (Startwerte; Einfluss im Diagramm sichtbar).</li>"
+              "<li>Klicke <b>Berechnen</b> – der PT2-Filter wird auf die Temperatur angewendet,<br>"
+              "dann wird Poly2 auf (T_pt2, Gewichtsd&auml;mpfung) gefittet.</li>"
+              "<li>R&sup2; &gt; 0,8 anstreben; T&sub2; anpassen wenn n&ouml;tig.</li>"
+              "<li>Speichern aktiviert Stufe 2 optional.</li>"
+              "</ol>"
+              "<p><small>T&sub2; = Zeitkonstante des PT2-Filters in Minuten (z.B. 240 = 4 h).<br>"
+              "D = D&auml;mpfungsgrad (0,5 = schwingungsf&auml;hig, 0,7 = kritisch ged&auml;mpft, 1,0 = &uuml;berd&auml;mpft)."
+              "</small></p></div>");
+
+    html += F("<div class='card'><h2>Filter-Parameter</h2>"
+              "<label>T&#x2082; (Minuten):</label>"
+              "<input type='number' id='t2in' value='240' min='1' step='10'>"
+              "<label>D (D&auml;mpfung):</label>"
+              "<input type='number' id='din' value='0.7' min='0.1' max='2' step='0.05'></div>");
+
+    html += F("<div class='card'><h2>CSV-Dateien ausw&auml;hlen</h2>"
+              "<label>Gewicht-CSV:</label>"
+              "<input type='file' id='wf' accept='.csv,.txt' style='width:100%;margin:4px 0 12px 0'>"
+              "<label>Temperatur-CSV:</label>"
+              "<input type='file' id='tf' accept='.csv,.txt' style='width:100%;margin:4px 0 12px 0'>"
+              "<button class='btn' onclick='calculate()'>&#x1F4D0; Berechnen</button></div>");
+
+    html += F("<div id='res' style='display:none'>"
+              "<div class='card'><h2>Ergebnis des Fits</h2>"
+              "<div class='row'><span class='label'>a (T&#x2082;-Koeff.)</span>"
+              "<span id='ca' class='value'>-</span></div>"
+              "<div class='row'><span class='label'>b (T-Koeff.)</span>"
+              "<span id='cb' class='value'>-</span></div>"
+              "<div class='row'><span class='label'>c (Konstante)</span>"
+              "<span id='cc' class='value'>-</span></div>"
+              "<div class='row'><span class='label'>R&sup2; (G&uuml;te)</span>"
+              "<span id='cr2' class='value'>-</span></div>"
+              "<div class='row'><span class='label'>Datenpunkte</span>"
+              "<span id='cn' class='value'>-</span></div>"
+              "<canvas id='plot' width='300' height='180' "
+              "style='width:100%;border:1px solid #eee;border-radius:6px;margin:10px 0'></canvas>"
+              "</div>"
+              "<div class='card'>"
+              "<label>Korrektur nach dem Speichern aktivieren:</label>"
+              "<select id='enSel' style='width:100%;padding:9px;margin:4px 0 10px 0;"
+              "border:1px solid #ddd;border-radius:7px;font-size:1em'>"
+              "<option value='1'>Ja</option><option value='0'>Nein</option></select>"
+              "<button class='btn' onclick='saveCoeff()'>&#x1F4BE; Speichern</button>"
+              "</div></div>");
+
+    html += F("<a class='back' href='/params'>&#x2190; Zur&uuml;ck zu Parameter</a>");
+    html += FPSTR(PT2CAL_JS);
+    html += HTML_END;
+    sendHtml(client, 200, html);
 }
 
 // ============================================================
@@ -1586,7 +1874,9 @@ void WebServerManager::handleParams(WiFiClient& client) {
                 "<label>b:</label><input type='number' name='b' step='any' value='" + String(bbuf) + "'>"
                 "<label>c:</label><input type='number' name='c' step='any' value='" + String(cbuf) + "'>"
                 "<button class='btn' type='submit'>&#x1F4BE; Speichern</button>"
-                "</form></div>";
+                "</form>"
+                "<a href='/pt2cal' style='font-size:.88em;color:#e6a817'>"
+                "&#x1F4C8; CSV-Fit Assistent (PT2) &rarr;</a></div>";
     }
 
     html += "<a class='back' href='/'>&#x2190; Zur&uuml;ck</a>";

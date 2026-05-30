@@ -110,7 +110,17 @@ void MqttClientManager::publishScaleData(const ScaleData& data) {
     DEBUG_PRINTF("[MQTT] Weight: %s = %s  [%s]\n",
                  topic.c_str(), payload, ok ? "OK" : "FEHLER");
 
-    // Temperaturkorrigiertes Gewicht
+    // Stufe 1: T-korrigiertes Gewicht (Poly2 direkt)
+    String tcTopic = base + "/weight_t_corrected";
+    char   tcPayload[72];
+    snprintf(tcPayload, sizeof(tcPayload),
+             "{\"value\":%.3f,\"unit\":\"kg\",\"corrected\":%s,\"ts\":%lu}",
+             data.weightTCorrectedKg,
+             data.tempCorrectionActive ? "true" : "false",
+             millis() / 1000UL);
+    mqttClient->publish(tcTopic.c_str(), tcPayload, MQTT_RETAIN);
+
+    // Stufe 1+2: vollständig korrigiertes Gewicht (T + PT2)
     String corrTopic = base + "/weight_corrected";
     char   corrPayload[72];
     snprintf(corrPayload, sizeof(corrPayload),
@@ -203,8 +213,10 @@ void MqttClientManager::sendDiscoveryConfig() {
 
     sendSensorDiscovery("weight",          "Bienenstock Gewicht",
                         nullptr,           "measurement", "kg", "mdi:scale");
-    sendSensorDiscovery("weight_corrected", "Bienenstock Gewicht (T-korrigiert)",
-                        nullptr,           "measurement", "kg", "mdi:scale-balance");
+    sendSensorDiscovery("weight_t_corrected", "Bienenstock Gewicht (Poly2-korr.)",
+                        nullptr,            "measurement", "kg", "mdi:scale-balance");
+    sendSensorDiscovery("weight_corrected", "Bienenstock Gewicht (T+PT2-korr.)",
+                        nullptr,           "measurement", "kg", "mdi:sine-wave");
     sendSensorDiscovery("temperature", "Bienenstock Temperatur",
                         "temperature", "measurement", "\xc2\xb0\x43",  // °C
                         "mdi:thermometer");

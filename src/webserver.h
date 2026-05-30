@@ -108,6 +108,7 @@ private:
     void handleTempCalPage(WiFiClient& client);
     void handleTempCalApiGet(WiFiClient& client);
     void handleTempCalApiPost(WiFiClient& client, const String& body);
+    void handlePT2CalPage(WiFiClient& client);
     void handlePT2CalApiGet(WiFiClient& client);
     void handlePT2CalApiPost(WiFiClient& client, const String& body);
     void handleWifiScan(WiFiClient& client);
