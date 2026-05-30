@@ -10,6 +10,7 @@ ScaleReader::ScaleReader()
     memset(sampleBuf, 0, sizeof(sampleBuf));
     memset(fastBuf,   0, sizeof(fastBuf));
     data.gain                 = HX711_DEFAULT_GAIN;
+    data.weightTCorrectedKg   = 0.0f;
     data.weightCorrectedKg    = 0.0f;
     data.fastWeightKg         = 0.0f;
     data.tempCorrectionActive = false;

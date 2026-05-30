@@ -215,6 +215,51 @@ bool ConfigManager::saveTempCalConfig(const TempCalConfig& config) {
 }
 
 // ============================================================
+// PT2-KORREKTUR
+// ============================================================
+
+bool ConfigManager::loadPT2CalConfig(PT2CalConfig& config) {
+    config = PT2CalConfig{};
+
+    if (!configExists(CONFIG_FILE_PT2CAL)) return false;
+
+    File file = LittleFS.open(CONFIG_FILE_PT2CAL, "r");
+    if (!file) return false;
+
+    JsonDocument doc;
+    if (deserializeJson(doc, file)) { file.close(); return false; }
+    file.close();
+
+    config.enabled = doc["enabled"] | false;
+    config.T2_min  = doc["T2_min"]  | 240.0f;
+    config.D       = doc["D"]       | 0.5f;
+    config.a       = doc["a"]       | 0.0f;
+    config.b       = doc["b"]       | 0.0f;
+    config.c       = doc["c"]       | 0.0f;
+
+    DEBUG_PRINTF("[Config] PT2Cal geladen: enabled=%d T2=%.1f D=%.2f\n",
+                 config.enabled, config.T2_min, config.D);
+    return true;
+}
+
+bool ConfigManager::savePT2CalConfig(const PT2CalConfig& config) {
+    JsonDocument doc;
+    doc["enabled"] = config.enabled;
+    doc["T2_min"]  = config.T2_min;
+    doc["D"]       = config.D;
+    doc["a"]       = config.a;
+    doc["b"]       = config.b;
+    doc["c"]       = config.c;
+
+    String json;
+    serializeJsonPretty(doc, json);
+    bool ok = writeJson(CONFIG_FILE_PT2CAL, json.c_str());
+    if (ok) DEBUG_PRINTF("[Config] PT2Cal gespeichert: enabled=%d T2=%.1f D=%.2f\n",
+                         config.enabled, config.T2_min, config.D);
+    return ok;
+}
+
+// ============================================================
 // HILFSMETHODEN
 // ============================================================
 

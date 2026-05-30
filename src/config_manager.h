@@ -11,6 +11,7 @@
 #include "config.h"
 #include "scale_reader.h"
 #include "temp_cal.h"
+// PT2CalConfig is defined in temp_cal.h
 
 struct WifiConfig {
     char ssid[64];
@@ -50,6 +51,9 @@ public:
 
     bool loadTempCalConfig(TempCalConfig& config);
     bool saveTempCalConfig(const TempCalConfig& config);
+
+    bool loadPT2CalConfig(PT2CalConfig& config);
+    bool savePT2CalConfig(const PT2CalConfig& config);
 
     bool   configExists(const char* filename);
     bool   deleteConfig(const char* filename);

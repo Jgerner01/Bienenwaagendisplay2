@@ -74,6 +74,7 @@
 #define CONFIG_FILE_MQTT    "/mqtt.json"
 #define CONFIG_FILE_SCALE   "/scale.json"
 #define CONFIG_FILE_TEMPCAL "/tempcal.json"
+#define CONFIG_FILE_PT2CAL  "/pt2cal.json"
 
 // ============================================================
 // TASTER (D8 / GPIO15)

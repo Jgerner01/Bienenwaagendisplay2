@@ -19,7 +19,8 @@ struct ScaleConfig {
 
 struct ScaleData {
     float         weightKg;
-    float         weightCorrectedKg;   // Temperaturkorrigiertes Gewicht
+    float         weightTCorrectedKg;  // Stufe 1: Poly2 direkt (T-Korrektur)
+    float         weightCorrectedKg;   // Stufe 1+2: T-Korr + PT2-Korr (vollständig)
     float         trimmedMeanKg;       // Getrimmter Mittelwert (je 5 Ausreißer entfernt) in kg
     float         spreadKg;            // Standardabweichung aller Samples in kg
     float         fastWeightKg;        // Schnell-Median (SCHNELL_SAMPLES, ~1 s Fenster)
@@ -56,8 +57,10 @@ public:
     void resetToDefaults();
 
     const ScaleData& getData() const { return data; }
-    void setWeightCorrected(float kg, bool active) {
-        data.weightCorrectedKg    = kg;
+    // kgT  = nach Stufe 1 (Poly2 direkt), kgFull = nach Stufe 1+2
+    void setWeightCorrected(float kgT, float kgFull, bool active) {
+        data.weightTCorrectedKg   = kgT;
+        data.weightCorrectedKg    = kgFull;
         data.tempCorrectionActive = active;
     }
     bool isReady();

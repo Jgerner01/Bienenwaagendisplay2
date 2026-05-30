@@ -45,6 +45,8 @@ static WifiConfig    wifiConfig;
 static MqttConfig    mqttConfig;
 static ScaleConfig   scaleConfig;
 static TempCalConfig tempCalConfig;
+static PT2CalConfig  pt2CalConfig;
+static PT2FilterState pt2FilterState;
 
 static bool          mqttEnabled        = false;
 static unsigned long lastMqttPublish    = 0;
@@ -55,9 +57,9 @@ static bool          wifiWasConnected   = false;
 // ============================================================
 
 static DisplayMode   displayMode      = DisplayMode::NORMAL;
-static bool          ertragsAktiv     = false;   // Ertragstara gesetzt?
-static float         ertragsOffset    = 0.0f;    // korrigiertes Gewicht zum Zeitpunkt der Ertragstarierung
-static float         schnellOffset    = 0.0f;    // fastWeightKg zum Zeitpunkt der Schnellmessung-Tara
+static bool          ertragsAktiv     = false;
+static float         ertragsOffset    = 0.0f;
+static float         schnellOffset    = 0.0f;
 
 // ============================================================
 // CALLBACKS
@@ -66,6 +68,7 @@ static float         schnellOffset    = 0.0f;    // fastWeightKg zum Zeitpunkt d
 void onWifiSave(const WifiConfig& config) {
     configMgr.saveWifiConfig(config);
     wifiConfig = config;
+    webServer.setWifiConfig(config);
 }
 
 void onMqttSave(const MqttConfig& config) {
@@ -120,6 +123,12 @@ void onMqttCalibrate(float knownKg) {
 void onTempCalSave(const TempCalConfig& config) {
     configMgr.saveTempCalConfig(config);
     tempCalConfig = config;
+}
+
+void onPT2CalSave(const PT2CalConfig& config) {
+    configMgr.savePT2CalConfig(config);
+    pt2CalConfig   = config;
+    pt2FilterState = PT2FilterState{};   // Filter-Zustand zurücksetzen wenn Parameter ändern
 }
 
 // ============================================================
@@ -185,32 +194,24 @@ void setup() {
     DEBUG_PRINTLN("  Board: Wemos NodeMCU");
     DEBUG_PRINTLN("=============================\n");
 
-    // LittleFS
     if (!configMgr.begin()) {
         DEBUG_PRINTLN("[ERROR] LittleFS fehlgeschlagen!");
     }
 
-    // Konfigurationen laden
     configMgr.loadWifiConfig(wifiConfig);
     configMgr.loadMqttConfig(mqttConfig);
     configMgr.loadScaleConfig(scaleConfig);
     configMgr.loadTempCalConfig(tempCalConfig);
+    configMgr.loadPT2CalConfig(pt2CalConfig);
 
     mqttEnabled = mqttConfig.enabled;
 
-    // Display initialisieren (Wire.begin innen)
     displayMgr.begin();
-
-    // HX711 initialisieren
     scaleReader.begin(scaleConfig);
-
-    // DS18B20 initialisieren
     tempSensor.begin();
-
-    // Taster initialisieren
     button.begin();
 
-    // WebServer + WiFi starten
+    webServer.setWifiConfig(wifiConfig);
     webServer.setWifiSaveCallback(onWifiSave);
     webServer.setMqttSaveCallback(onMqttSave);
     webServer.setScaleSaveCallback(onScaleSave);
@@ -221,6 +222,8 @@ void setup() {
     webServer.setTempSensor(&tempSensor);
     webServer.setTempCalConfig(&tempCalConfig);
     webServer.setTempCalSaveCallback(onTempCalSave);
+    webServer.setPT2CalRef(&pt2CalConfig);
+    webServer.setPT2CalSaveCallback(onPT2CalSave);
     webServer.setErtragsRef(&ertragsAktiv, &ertragsOffset);
 
     mqttClient.setTareCallback(onMqttTare);
@@ -231,9 +234,7 @@ void setup() {
     if (connected) {
         wifiWasConnected = true;
         DEBUG_PRINTF("[WiFi] STA: %s\n", webServer.getIp().c_str());
-
         setupOta();
-
         if (mqttEnabled && strlen(mqttConfig.broker) > 0) {
             mqttClient.begin(mqttConfig);
             mqttClient.setStatusCallback(onMqttStatusChange);
@@ -259,16 +260,30 @@ void loop() {
     scaleReader.update();
     tempSensor.update();
 
-    // 2a. Temperaturkorrektur anwenden
+    // 2a. Zweistufige Temperaturkorrektur anwenden
     {
         const ScaleData& sd = scaleReader.getData();
         const TempData&  td = tempSensor.getData();
-        if (sd.isValid && tempCalConfig.enabled && td.isValid) {
-            scaleReader.setWeightCorrected(
-                applyTempCorrection(sd.weightKg, td.tempC, tempCalConfig), true);
-        } else {
-            scaleReader.setWeightCorrected(sd.weightKg, false);
+        float kgT    = sd.weightKg;   // nach Stufe 1
+        float kgFull = sd.weightKg;   // nach Stufe 1 + 2
+        bool  active = false;
+
+        if (sd.isValid && td.isValid) {
+            // Stufe 1: Poly2 direkt
+            if (tempCalConfig.enabled) {
+                kgT    = applyTempCorrection(sd.weightKg, td.tempC, tempCalConfig);
+                kgFull = kgT;
+                active = true;
+            }
+            // Stufe 2: PT2-Filter → Poly2
+            if (pt2CalConfig.enabled) {
+                float T_pt2 = updatePT2Filter(pt2FilterState, td.tempC,
+                                              pt2CalConfig.T2_min, pt2CalConfig.D);
+                kgFull = applyPT2Correction(kgFull, T_pt2, pt2CalConfig);
+                active = true;
+            }
         }
+        scaleReader.setWeightCorrected(kgT, kgFull, active);
     }
 
     // 3. Taster auswerten
@@ -278,32 +293,22 @@ void loop() {
 
         if (ev == ButtonEvent::SHORT_PRESS) {
             if (displayMode == DisplayMode::SCHNELLMESSUNG) {
-                // Schnellmessung beenden
                 displayMode = DisplayMode::NORMAL;
-                DEBUG_PRINTLN("[Button] Schnellmessung beendet");
                 displayMgr.showMessage("Schnellmessung", "beendet");
             } else {
-                // Schnellmessung starten: Schnell-Tara setzen
                 schnellOffset = sd.fastWeightKg;
                 displayMode   = DisplayMode::SCHNELLMESSUNG;
-                DEBUG_PRINTF("[Button] Schnellmessung gestartet, offset=%.3f\n", schnellOffset);
                 displayMgr.showMessage("Schnellmessung", "gestartet");
             }
         } else if (ev == ButtonEvent::LONG_HELD) {
-            // Bestätigungsfenster öffnen
             displayMode = DisplayMode::CONFIRM_ERTRAG;
-            DEBUG_PRINTLN("[Button] Bestaetigungsfenster offen");
         } else if (ev == ButtonEvent::CONFIRM) {
-            // Ertragstara setzen
             ertragsOffset = sd.weightCorrectedKg;
             ertragsAktiv  = true;
             displayMode   = DisplayMode::NORMAL;
-            DEBUG_PRINTF("[Button] Ertragsmessung tariert: offset=%.3f\n", ertragsOffset);
             displayMgr.showMessage("Ertragsmessung", "Tariert!");
         } else if (ev == ButtonEvent::CONFIRM_TIMEOUT) {
-            // Abbruch
             displayMode = DisplayMode::NORMAL;
-            DEBUG_PRINTLN("[Button] Bestaetigung abgelaufen, abgebrochen");
         }
     }
 

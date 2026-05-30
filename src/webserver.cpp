@@ -75,11 +75,12 @@ input[type=text],input[type=password],input[type=number],select{
 WebServerManager::WebServerManager()
     : server(nullptr), dnsServer(nullptr), apMode(false), staConnected(false),
       scaleReaderRef(nullptr), tempSensorRef(nullptr), tempCalRef(nullptr),
-      ertragsAktivRef(nullptr), ertragsOffsetRef(nullptr),
+      pt2CalRef(nullptr), ertragsAktivRef(nullptr), ertragsOffsetRef(nullptr),
       wifiSaveCb(nullptr), mqttSaveCb(nullptr),
-      scaleSaveCb(nullptr), tempCalSaveCb(nullptr),
+      scaleSaveCb(nullptr), tempCalSaveCb(nullptr), pt2CalSaveCb(nullptr),
       tareCb(nullptr), calibrateCb(nullptr),
       displayCb(nullptr), apModeCb(nullptr), connectStartTime(0), apShutdownTime(0) {
+    memset(&cachedWifiConfig, 0, sizeof(WifiConfig));
 }
 
 WebServerManager::~WebServerManager() {
@@ -103,16 +104,12 @@ bool WebServerManager::begin(ScaleReader* scaleReader) {
     WiFi.disconnect(true);
     delay(100);
 
-    WifiConfig wifiCfg;
-    ConfigManager cfg;
-    cfg.begin();
-    cfg.loadWifiConfig(wifiCfg);
-
-    if (strlen(wifiCfg.ssid) > 0) {
-        DEBUG_PRINTF("[WiFi] Verbinde mit: %s\n", wifiCfg.ssid);
+    // cachedWifiConfig wurde vor begin() via setWifiConfig() gesetzt
+    if (strlen(cachedWifiConfig.ssid) > 0) {
+        DEBUG_PRINTF("[WiFi] Verbinde mit: %s\n", cachedWifiConfig.ssid);
         WiFi.mode(WIFI_STA);
         WiFi.hostname(WIFI_HOSTNAME);
-        WiFi.begin(wifiCfg.ssid, wifiCfg.password);
+        WiFi.begin(cachedWifiConfig.ssid, cachedWifiConfig.password);
 
         unsigned long waitStart = millis();
         while (WiFi.status() != WL_CONNECTED &&
@@ -171,17 +168,14 @@ void WebServerManager::startApMode() {
 // ============================================================
 
 bool WebServerManager::startStaMode() {
-    WifiConfig wifiCfg;
-    ConfigManager cfg;
-    cfg.begin();
-    if (!cfg.loadWifiConfig(wifiCfg) || strlen(wifiCfg.ssid) == 0) return false;
+    if (strlen(cachedWifiConfig.ssid) == 0) return false;
 
-    DEBUG_PRINTF("[WiFi] AP+STA Verbinde: %s\n", wifiCfg.ssid);
+    DEBUG_PRINTF("[WiFi] AP+STA Verbinde: %s\n", cachedWifiConfig.ssid);
 
     // AP+STA: AP bleibt aktiv → laufende HTTP-Verbindung überlebt
     WiFi.mode(WIFI_AP_STA);
     WiFi.hostname(WIFI_HOSTNAME);
-    WiFi.begin(wifiCfg.ssid, wifiCfg.password);
+    WiFi.begin(cachedWifiConfig.ssid, cachedWifiConfig.password);
 
     unsigned long waitStart = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - waitStart < 30000UL) {
@@ -321,12 +315,22 @@ void WebServerManager::parseRequest(WiFiClient& client) {
         handleReboot(client);
     } else if (path == "/api/data") {
         handleApiData(client);
+    } else if (path == "/params") {
+        handleParams(client);
+    } else if (path == "/params/tempcal" && method == "POST") {
+        handleParamsTempCalPost(client, body);
+    } else if (path == "/params/pt2cal" && method == "POST") {
+        handleParamsPT2CalPost(client, body);
     } else if (path == "/tempcal") {
         handleTempCalPage(client);
     } else if (path == "/api/tempcal" && method == "GET") {
         handleTempCalApiGet(client);
     } else if (path == "/api/tempcal" && method == "POST") {
         handleTempCalApiPost(client, body);
+    } else if (path == "/api/pt2cal" && method == "GET") {
+        handlePT2CalApiGet(client);
+    } else if (path == "/api/pt2cal" && method == "POST") {
+        handlePT2CalApiPost(client, body);
     } else if (path == "/ota") {
         handleOtaPage(client);
     } else {
@@ -473,9 +477,7 @@ void WebServerManager::handleRoot(WiFiClient& client) {
     // Navigation
     html += "<div class='nav'>"
             "<a href='/scale'>&#x2696; Waage</a>"
-            "<a href='/calibrate'>&#x1F4D0; Kalibrierung</a>"
-            "<a href='/gain'>&#x1F4CA; Gain</a>"
-            "<a href='/tempcal'>&#x1F321; T-Korrektur</a>"
+            "<a href='/params'>&#x2699; Parameter</a>"
             "<a href='/mqtt'>&#x1F4E1; MQTT</a>"
             "<a href='/scan'>&#x1F4F6; WiFi</a>"
             "<a href='/ota'>&#x2B06; OTA</a>"
@@ -980,10 +982,14 @@ void WebServerManager::handleWifiScan(WiFiClient& client) {
     }
     html += "</div>";
 
+    String currentSsid = String(cachedWifiConfig.ssid);
+    currentSsid.replace("'", "\\'");   // einfache Anführungszeichen im SSID escapen
     html += "<div class='card'><h2>Verbinden</h2>"
             "<form action='/save' method='post'>"
-            "<label>SSID:</label><input type='text' id='ssid' name='ssid' required>"
-            "<label>Passwort:</label><input type='password' id='pw' name='password'>"
+            "<label>SSID:</label>"
+            "<input type='text' id='ssid' name='ssid' required value='" + currentSsid + "'>"
+            "<label>Passwort:</label>"
+            "<input type='password' id='pw' name='password' placeholder='(leer lassen = unver&auml;ndert)'>"
             "<button class='btn' type='submit'>&#x1F4F6; Verbinden</button>"
             "</form>"
             "<a class='back' href='/'>&#x2190; Zur&uuml;ck</a></div>";
@@ -1000,16 +1006,15 @@ void WebServerManager::handleWifiSave(WiFiClient& client, const String& body) {
     String ssid = urlDecode(getRequestParam(body, "ssid"));
     String pw   = urlDecode(getRequestParam(body, "password"));
 
-    WifiConfig wifiCfg;
-    memset(&wifiCfg, 0, sizeof(WifiConfig));
-    strncpy(wifiCfg.ssid,     ssid.c_str(), sizeof(wifiCfg.ssid) - 1);
-    strncpy(wifiCfg.password, pw.c_str(),   sizeof(wifiCfg.password) - 1);
-    wifiCfg.dhcp = true;
+    // Passwort beibehalten wenn Feld leer gelassen wurde
+    String effectivePw = pw.length() > 0 ? pw : String(cachedWifiConfig.password);
+    memset(&cachedWifiConfig, 0, sizeof(WifiConfig));
+    strncpy(cachedWifiConfig.ssid,     ssid.c_str(),        sizeof(cachedWifiConfig.ssid) - 1);
+    strncpy(cachedWifiConfig.password, effectivePw.c_str(), sizeof(cachedWifiConfig.password) - 1);
+    cachedWifiConfig.dhcp = true;
 
-    ConfigManager cfg;
-    cfg.begin();
-    cfg.saveWifiConfig(wifiCfg);
-    if (wifiSaveCb) wifiSaveCb(wifiCfg);
+    // Einmalig speichern – nur über den Callback (vermeidet doppeltes LittleFS-Begin)
+    if (wifiSaveCb) wifiSaveCb(cachedWifiConfig);
 
     // AP+STA: Verbindung aufbauen während AP noch läuft → TCP-Verbindung bleibt erhalten
     bool connected = startStaMode();
@@ -1476,6 +1481,189 @@ window.onload=function(){
 </script>
 )js";
 
+// ============================================================
+// SEITE: /params – Alle Parameter editierbar
+// ============================================================
+
+void WebServerManager::handleParams(WiFiClient& client) {
+    const ScaleData& d = scaleReaderRef ? scaleReaderRef->getData() : ScaleData{};
+    TempCalConfig tc = tempCalRef ? *tempCalRef : TempCalConfig{};
+    PT2CalConfig  p2 = pt2CalRef  ? *pt2CalRef  : PT2CalConfig{};
+
+    String html = htmlHead("Parameter");
+    html += "<h1>&#x2699; Parameter</h1>";
+
+    // --- Tara ---
+    html += F("<div class='card'><h2>&#x21A9; Tara</h2>");
+    html += "<div class='row'><span class='label'>Aktueller Offset</span>"
+            "<span class='value'>" + String(d.offset) + "</span></div>";
+    html += F("<p style='font-size:.88em;color:#666;margin:6px 0'>"
+              "Entleere die Waage und setze den Nullpunkt.</p>"
+              "<form method='post' action='/tare'>"
+              "<button class='btn' type='submit'>&#x2295; Tara setzen</button>"
+              "</form></div>");
+
+    // --- Kalibrierung ---
+    {
+        char fbuf[20];
+        snprintf(fbuf, sizeof(fbuf), "%.2f", d.calibrationFactor);
+        html += F("<div class='card'><h2>&#x1F4D0; Kalibrierung</h2>");
+        html += "<div class='row'><span class='label'>Kalibrierfaktor</span>"
+                "<span class='value'>" + String(fbuf) + "</span></div>";
+        html += F("<p style='font-size:.88em;color:#666;margin:6px 0'>"
+                  "Tara setzen, dann bekanntes Gewicht auflegen und eintragen.</p>"
+                  "<form method='post' action='/calibrate'>"
+                  "<label>Bekanntes Gewicht (kg):</label>"
+                  "<input type='number' name='weight' step='0.001' min='0.1' required "
+                  "placeholder='z.B. 1.000'>"
+                  "<button class='btn' type='submit'>&#x1F4D0; Kalibrieren</button>"
+                  "</form></div>");
+    }
+
+    // --- Gain ---
+    {
+        String s128 = (d.gain == 128) ? " selected" : "";
+        String s64  = (d.gain == 64)  ? " selected" : "";
+        String s32  = (d.gain == 32)  ? " selected" : "";
+        html += F("<div class='card'><h2>&#x1F4CA; Gain-Faktor</h2>"
+                  "<form method='post' action='/gain'>"
+                  "<select name='gain'>"
+                  "<option value='128'");
+        html += s128 + F(">128 – Kanal A (Standard)</option>"
+                  "<option value='64'");
+        html += s64  + F(">64 – Kanal A</option>"
+                  "<option value='32'");
+        html += s32  + F(">32 – Kanal B</option>"
+                  "</select>"
+                  "<button class='btn' type='submit'>&#x2714; Speichern</button>"
+                  "</form></div>");
+    }
+
+    // --- Poly2 T-Korrektur (Stufe 1) ---
+    {
+        char abuf[20], bbuf[20], cbuf[20];
+        snprintf(abuf, sizeof(abuf), "%.8f", tc.a);
+        snprintf(bbuf, sizeof(bbuf), "%.8f", tc.b);
+        snprintf(cbuf, sizeof(cbuf), "%.6f",  tc.c);
+        html += F("<div class='card'><h2>&#x1F321; Poly2 T-Korrektur (Stufe 1)</h2>"
+                  "<p style='font-size:.88em;color:#666;margin:0 0 8px 0'>"
+                  "Korrektur(T) = a&middot;T&sup2; + b&middot;T + c &nbsp;&rarr;&nbsp; "
+                  "Gew. (T-korr.) = Rohgew. &minus; Korrektur(T)</p>");
+        html += "<form method='post' action='/params/tempcal'>"
+                "<div class='row'><span class='label'>Aktiv</span>"
+                "<input type='checkbox' name='enabled' value='1'" +
+                String(tc.enabled ? " checked" : "") + "></div>"
+                "<label>a:</label><input type='number' name='a' step='any' value='" + String(abuf) + "'>"
+                "<label>b:</label><input type='number' name='b' step='any' value='" + String(bbuf) + "'>"
+                "<label>c:</label><input type='number' name='c' step='any' value='" + String(cbuf) + "'>"
+                "<button class='btn' type='submit'>&#x1F4BE; Speichern</button>"
+                "</form>"
+                "<a href='/tempcal' style='font-size:.88em;color:#e6a817'>"
+                "&#x1F4C8; CSV-Fit Assistent &rarr;</a></div>";
+    }
+
+    // --- PT2 Korrektur (Stufe 2) ---
+    {
+        char t2buf[16], dbuf[12], abuf[20], bbuf[20], cbuf[20];
+        snprintf(t2buf, sizeof(t2buf), "%.1f",  p2.T2_min);
+        snprintf(dbuf,  sizeof(dbuf),  "%.3f",  p2.D);
+        snprintf(abuf,  sizeof(abuf),  "%.8f",  p2.a);
+        snprintf(bbuf,  sizeof(bbuf),  "%.8f",  p2.b);
+        snprintf(cbuf,  sizeof(cbuf),  "%.6f",  p2.c);
+        html += F("<div class='card'><h2>&#x23F3; PT2 Korrektur (Stufe 2)</h2>"
+                  "<p style='font-size:.88em;color:#666;margin:0 0 8px 0'>"
+                  "PT2-Filter glattet die Temperatur mit Zeitkonstante T&sub2;.<br>"
+                  "Korrektur(T_pt2) = a&middot;T_pt2&sup2; + b&middot;T_pt2 + c</p>");
+        html += "<form method='post' action='/params/pt2cal'>"
+                "<div class='row'><span class='label'>Aktiv</span>"
+                "<input type='checkbox' name='enabled' value='1'" +
+                String(p2.enabled ? " checked" : "") + "></div>"
+                "<label>T&#x2082; (Minuten):</label>"
+                "<input type='number' name='t2' step='1' min='1' value='" + String(t2buf) + "'>"
+                "<label>D (D&auml;mpfung, z.B. 0.7):</label>"
+                "<input type='number' name='d' step='0.01' min='0.1' max='2' value='" + String(dbuf) + "'>"
+                "<label>a:</label><input type='number' name='a' step='any' value='" + String(abuf) + "'>"
+                "<label>b:</label><input type='number' name='b' step='any' value='" + String(bbuf) + "'>"
+                "<label>c:</label><input type='number' name='c' step='any' value='" + String(cbuf) + "'>"
+                "<button class='btn' type='submit'>&#x1F4BE; Speichern</button>"
+                "</form></div>";
+    }
+
+    html += "<a class='back' href='/'>&#x2190; Zur&uuml;ck</a>";
+    html += HTML_END;
+    sendHtml(client, 200, html);
+}
+
+// ============================================================
+// POST: /params/tempcal – Poly2 Formular-Speicherung
+// ============================================================
+
+void WebServerManager::handleParamsTempCalPost(WiFiClient& client, const String& body) {
+    TempCalConfig cfg;
+    cfg.enabled = getRequestParam(body, "enabled") == "1";
+    cfg.a = urlDecode(getRequestParam(body, "a")).toFloat();
+    cfg.b = urlDecode(getRequestParam(body, "b")).toFloat();
+    cfg.c = urlDecode(getRequestParam(body, "c")).toFloat();
+    if (tempCalSaveCb) tempCalSaveCb(cfg);
+    sendRedirect(client, "/params");
+}
+
+// ============================================================
+// POST: /params/pt2cal – PT2 Formular-Speicherung
+// ============================================================
+
+void WebServerManager::handleParamsPT2CalPost(WiFiClient& client, const String& body) {
+    PT2CalConfig cfg;
+    cfg.enabled = getRequestParam(body, "enabled") == "1";
+    cfg.T2_min  = urlDecode(getRequestParam(body, "t2")).toFloat();
+    cfg.D       = urlDecode(getRequestParam(body, "d")).toFloat();
+    cfg.a       = urlDecode(getRequestParam(body, "a")).toFloat();
+    cfg.b       = urlDecode(getRequestParam(body, "b")).toFloat();
+    cfg.c       = urlDecode(getRequestParam(body, "c")).toFloat();
+    if (cfg.T2_min < 1.0f) cfg.T2_min = 1.0f;
+    if (cfg.D      < 0.1f) cfg.D      = 0.1f;
+    if (pt2CalSaveCb) pt2CalSaveCb(cfg);
+    sendRedirect(client, "/params");
+}
+
+// ============================================================
+// API: GET /api/pt2cal
+// ============================================================
+
+void WebServerManager::handlePT2CalApiGet(WiFiClient& client) {
+    PT2CalConfig cfg;
+    if (pt2CalRef) cfg = *pt2CalRef;
+    char json[128];
+    snprintf(json, sizeof(json),
+             "{\"enabled\":%s,\"T2_min\":%.1f,\"D\":%.3f,"
+             "\"a\":%.8f,\"b\":%.8f,\"c\":%.6f}",
+             cfg.enabled ? "true" : "false",
+             cfg.T2_min, cfg.D, cfg.a, cfg.b, cfg.c);
+    sendJson(client, String(json));
+}
+
+// ============================================================
+// API: POST /api/pt2cal
+// ============================================================
+
+void WebServerManager::handlePT2CalApiPost(WiFiClient& client, const String& body) {
+    JsonDocument doc;
+    if (deserializeJson(doc, body)) {
+        sendJson(client, F("{\"ok\":false,\"err\":\"JSON ungueltig\"}"));
+        return;
+    }
+    PT2CalConfig cfg;
+    cfg.enabled = doc["enabled"] | false;
+    cfg.T2_min  = doc["T2_min"]  | 240.0f;
+    cfg.D       = doc["D"]       | 0.5f;
+    cfg.a       = doc["a"]       | 0.0f;
+    cfg.b       = doc["b"]       | 0.0f;
+    cfg.c       = doc["c"]       | 0.0f;
+    if (pt2CalSaveCb) pt2CalSaveCb(cfg);
+    sendJson(client, F("{\"ok\":true}"));
+}
+
+// ============================================================
 void WebServerManager::handleTempCalPage(WiFiClient& client) {
     String html = htmlHead("Temperaturkorrektur");
     html += F("<h1>&#x1F321; Temperaturkorrektur</h1>");

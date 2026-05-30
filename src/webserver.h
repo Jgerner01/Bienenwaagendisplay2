@@ -23,6 +23,7 @@ typedef void (*WifiSaveCallback)(const WifiConfig& config);
 typedef void (*MqttSaveCallback)(const MqttConfig& config);
 typedef void (*ScaleSaveCallback)(const ScaleConfig& config);
 typedef void (*TempCalSaveCallback)(const TempCalConfig& config);
+typedef void (*PT2CalSaveCallback)(const PT2CalConfig& config);
 typedef void (*TareCallback)();
 typedef bool (*CalibrateCallback)(float knownKg);
 
@@ -45,7 +46,10 @@ public:
     void setTempSensor(TempSensor* ts)                    { tempSensorRef = ts; }
     void setTempCalConfig(TempCalConfig* cfg)             { tempCalRef = cfg; }
     void setTempCalSaveCallback(TempCalSaveCallback cb)   { tempCalSaveCb = cb; }
+    void setPT2CalRef(PT2CalConfig* cfg)                  { pt2CalRef = cfg; }
+    void setPT2CalSaveCallback(PT2CalSaveCallback cb)     { pt2CalSaveCb = cb; }
     void setErtragsRef(bool* aktiv, float* offset)        { ertragsAktivRef = aktiv; ertragsOffsetRef = offset; }
+    void setWifiConfig(const WifiConfig& cfg)             { cachedWifiConfig = cfg; }
 
     // staConnected = STA verbunden; apMode = AP noch aktiv (auch während AP+STA)
     bool   isApMode()    const { return apMode && !staConnected; }
@@ -61,12 +65,15 @@ private:
     ScaleReader*        scaleReaderRef;
     TempSensor*         tempSensorRef;
     TempCalConfig*      tempCalRef;
+    PT2CalConfig*       pt2CalRef;
     bool*               ertragsAktivRef;
     float*              ertragsOffsetRef;
+    WifiConfig          cachedWifiConfig;   // aktuell gespeicherte WiFi-Konfiguration
     WifiSaveCallback    wifiSaveCb;
     MqttSaveCallback    mqttSaveCb;
     ScaleSaveCallback   scaleSaveCb;
     TempCalSaveCallback tempCalSaveCb;
+    PT2CalSaveCallback  pt2CalSaveCb;
     TareCallback        tareCb;
     CalibrateCallback   calibrateCb;
     void (*displayCb)(const String&);
@@ -95,9 +102,14 @@ private:
     void handleGainPost(WiFiClient& client, const String& body);
     void handleMqttPage(WiFiClient& client);
     void handleMqttPost(WiFiClient& client, const String& body);
+    void handleParams(WiFiClient& client);
+    void handleParamsTempCalPost(WiFiClient& client, const String& body);
+    void handleParamsPT2CalPost(WiFiClient& client, const String& body);
     void handleTempCalPage(WiFiClient& client);
     void handleTempCalApiGet(WiFiClient& client);
     void handleTempCalApiPost(WiFiClient& client, const String& body);
+    void handlePT2CalApiGet(WiFiClient& client);
+    void handlePT2CalApiPost(WiFiClient& client, const String& body);
     void handleWifiScan(WiFiClient& client);
     void handleWifiSave(WiFiClient& client, const String& body);
     void handleStatus(WiFiClient& client);
