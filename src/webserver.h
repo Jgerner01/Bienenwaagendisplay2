@@ -49,6 +49,7 @@ public:
     void setPT2CalRef(PT2CalConfig* cfg)                  { pt2CalRef = cfg; }
     void setPT2CalSaveCallback(PT2CalSaveCallback cb)     { pt2CalSaveCb = cb; }
     void setErtragsRef(bool* aktiv, float* offset)        { ertragsAktivRef = aktiv; ertragsOffsetRef = offset; }
+    void setErtragsSaveCallback(void (*cb)(bool, float))  { ertragsSaveCb = cb; }
     void setWifiConfig(const WifiConfig& cfg)             { cachedWifiConfig = cfg; }
 
     // staConnected = STA verbunden; apMode = AP noch aktiv (auch während AP+STA)
@@ -68,6 +69,7 @@ private:
     PT2CalConfig*       pt2CalRef;
     bool*               ertragsAktivRef;
     float*              ertragsOffsetRef;
+    void (*ertragsSaveCb)(bool, float);
     WifiConfig          cachedWifiConfig;   // aktuell gespeicherte WiFi-Konfiguration
     WifiSaveCallback    wifiSaveCb;
     MqttSaveCallback    mqttSaveCb;

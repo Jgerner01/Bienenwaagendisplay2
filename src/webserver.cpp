@@ -81,6 +81,7 @@ WebServerManager::WebServerManager()
     : server(nullptr), dnsServer(nullptr), apMode(false), staConnected(false),
       scaleReaderRef(nullptr), tempSensorRef(nullptr), tempCalRef(nullptr),
       pt2CalRef(nullptr), ertragsAktivRef(nullptr), ertragsOffsetRef(nullptr),
+      ertragsSaveCb(nullptr),
       wifiSaveCb(nullptr), mqttSaveCb(nullptr),
       scaleSaveCb(nullptr), tempCalSaveCb(nullptr), pt2CalSaveCb(nullptr),
       tareCb(nullptr), calibrateCb(nullptr),
@@ -657,6 +658,7 @@ void WebServerManager::handleErtragsTara(WiFiClient& client) {
     if (ertragsAktivRef && ertragsOffsetRef && scaleReaderRef) {
         *ertragsOffsetRef = scaleReaderRef->getData().weightCorrectedKg;
         *ertragsAktivRef  = true;
+        if (ertragsSaveCb) ertragsSaveCb(true, *ertragsOffsetRef);
         DEBUG_PRINTF("[Web] Ertragstara gesetzt: %.3f kg\n", *ertragsOffsetRef);
     }
     String html = htmlHead("Ertragsmessung");
@@ -670,6 +672,7 @@ void WebServerManager::handleErtragsTara(WiFiClient& client) {
 
 void WebServerManager::handleErtragsTaraReset(WiFiClient& client) {
     if (ertragsAktivRef) *ertragsAktivRef = false;
+    if (ertragsSaveCb) ertragsSaveCb(false, 0.0f);
     DEBUG_PRINTLN("[Web] Ertragsmessung zurückgesetzt");
     String html = htmlHead("Ertragsmessung");
     html += "<h1>Ertragsmessung zur&uuml;ckgesetzt</h1>"

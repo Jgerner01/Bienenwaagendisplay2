@@ -55,6 +55,9 @@ public:
     bool loadPT2CalConfig(PT2CalConfig& config);
     bool savePT2CalConfig(const PT2CalConfig& config);
 
+    bool loadErtragConfig(bool& aktiv, float& offset);
+    bool saveErtragConfig(bool aktiv, float offset);
+
     bool   configExists(const char* filename);
     bool   deleteConfig(const char* filename);
     size_t getFreeSpace();

@@ -203,6 +203,7 @@ void setup() {
     configMgr.loadScaleConfig(scaleConfig);
     configMgr.loadTempCalConfig(tempCalConfig);
     configMgr.loadPT2CalConfig(pt2CalConfig);
+    configMgr.loadErtragConfig(ertragsAktiv, ertragsOffset);
 
     mqttEnabled = mqttConfig.enabled;
 
@@ -225,6 +226,9 @@ void setup() {
     webServer.setPT2CalRef(&pt2CalConfig);
     webServer.setPT2CalSaveCallback(onPT2CalSave);
     webServer.setErtragsRef(&ertragsAktiv, &ertragsOffset);
+    webServer.setErtragsSaveCallback([](bool a, float o){
+        configMgr.saveErtragConfig(a, o);
+    });
 
     mqttClient.setTareCallback(onMqttTare);
     mqttClient.setCalibrateCallback(onMqttCalibrate);
@@ -305,6 +309,7 @@ void loop() {
         } else if (ev == ButtonEvent::CONFIRM) {
             ertragsOffset = sd.weightCorrectedKg;
             ertragsAktiv  = true;
+            configMgr.saveErtragConfig(ertragsAktiv, ertragsOffset);
             displayMode   = DisplayMode::NORMAL;
             displayMgr.showMessage("Ertragsmessung", "Tariert!");
         } else if (ev == ButtonEvent::CONFIRM_TIMEOUT) {

@@ -260,6 +260,42 @@ bool ConfigManager::savePT2CalConfig(const PT2CalConfig& config) {
 }
 
 // ============================================================
+// ERTRAGSBASIS
+// ============================================================
+
+bool ConfigManager::loadErtragConfig(bool& aktiv, float& offset) {
+    aktiv  = false;
+    offset = 0.0f;
+
+    if (!configExists(CONFIG_FILE_ERTRAG)) return false;
+
+    File file = LittleFS.open(CONFIG_FILE_ERTRAG, "r");
+    if (!file) return false;
+
+    JsonDocument doc;
+    if (deserializeJson(doc, file)) { file.close(); return false; }
+    file.close();
+
+    aktiv  = doc["aktiv"]  | false;
+    offset = doc["offset"] | 0.0f;
+
+    DEBUG_PRINTF("[Config] Ertrag geladen: aktiv=%d offset=%.3f\n", aktiv, offset);
+    return true;
+}
+
+bool ConfigManager::saveErtragConfig(bool aktiv, float offset) {
+    JsonDocument doc;
+    doc["aktiv"]  = aktiv;
+    doc["offset"] = offset;
+
+    String json;
+    serializeJsonPretty(doc, json);
+    bool ok = writeJson(CONFIG_FILE_ERTRAG, json.c_str());
+    if (ok) DEBUG_PRINTF("[Config] Ertrag gespeichert: aktiv=%d offset=%.3f\n", aktiv, offset);
+    return ok;
+}
+
+// ============================================================
 // HILFSMETHODEN
 // ============================================================
 
