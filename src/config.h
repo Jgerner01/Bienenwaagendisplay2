@@ -47,8 +47,11 @@
 #define WIFI_HOSTNAME       "bienenwaage"
 #define WIFI_AP_SSID        "Bienenwaage"
 #define WIFI_AP_PASSWORD    "12345678"
-#define WIFI_CONNECT_TIMEOUT_MS  20000UL
-#define AP_FALLBACK_TIMEOUT_MS   600000UL   // 10 Minuten
+#define WIFI_CONNECT_TIMEOUT_MS      20000UL
+#define AP_FALLBACK_TIMEOUT_MS       600000UL  // 10 Minuten
+#define WIFI_RECONNECT_INTERVAL_MS   30000UL   // 30 s zwischen Reconnect-Versuchen
+#define WIFI_RECONNECT_MAX_ATTEMPTS  10         // nach 10 Fehlversuchen → AP-Mode
+#define AP_REBOOT_TIMEOUT_MS         600000UL  // 10 min im AP-Mode ohne Verbindung → Reboot
 
 // ============================================================
 // MQTT

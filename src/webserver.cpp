@@ -85,7 +85,10 @@ WebServerManager::WebServerManager()
       wifiSaveCb(nullptr), mqttSaveCb(nullptr),
       scaleSaveCb(nullptr), tempCalSaveCb(nullptr), pt2CalSaveCb(nullptr),
       tareCb(nullptr), calibrateCb(nullptr),
-      displayCb(nullptr), apModeCb(nullptr), connectStartTime(0), apShutdownTime(0) {
+      displayCb(nullptr), apModeCb(nullptr),
+      connectStartTime(0), apShutdownTime(0),
+      lastReconnectMs(0), reconnectAttempts(0), reconnecting(false),
+      apStartMs(0) {
     memset(&cachedWifiConfig, 0, sizeof(WifiConfig));
 }
 
@@ -151,6 +154,7 @@ bool WebServerManager::begin(ScaleReader* scaleReader) {
 void WebServerManager::startApMode() {
     apMode       = true;
     staConnected = false;
+    apStartMs    = millis();
 
     WiFi.mode(WIFI_AP);
     WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD);
@@ -221,8 +225,58 @@ void WebServerManager::loop() {
         DEBUG_PRINTLN("[WiFi] AP abgeschaltet (STA aktiv)");
     }
 
+    // AP-Mode: Reboot nach Timeout wenn keine Verbindung zustande kommt
+    if (apMode && !staConnected && apStartMs > 0 &&
+        millis() - apStartMs >= AP_REBOOT_TIMEOUT_MS) {
+        DEBUG_PRINTLN("[WiFi] AP-Mode Timeout – Neustart");
+        delay(200);
+        ESP.restart();
+    }
+
+    // STA-Verbindungsabbruch erkennen → Reconnect einleiten
+    if (staConnected && !apMode && WiFi.status() != WL_CONNECTED) {
+        staConnected      = false;
+        reconnecting      = true;
+        reconnectAttempts = 0;
+        lastReconnectMs   = 0;   // sofort ersten Versuch starten
+        DEBUG_PRINTLN("[WiFi] Verbindung verloren – starte Reconnect");
+        if (displayCb) displayCb("Reconnect...");
+        if (apModeCb)  apModeCb(false);
+    }
+
+    // Reconnect-Schleife (nicht-blockierend)
+    if (reconnecting && strlen(cachedWifiConfig.ssid) > 0) {
+        if (WiFi.status() == WL_CONNECTED) {
+            // Verbindung wiederhergestellt
+            staConnected      = true;
+            reconnecting      = false;
+            reconnectAttempts = 0;
+            DEBUG_PRINTF("[WiFi] Reconnect OK: %s\n", WiFi.localIP().toString().c_str());
+            if (displayCb) displayCb(WiFi.localIP().toString());
+            if (apModeCb)  apModeCb(false);
+        } else if (millis() - lastReconnectMs >= WIFI_RECONNECT_INTERVAL_MS) {
+            lastReconnectMs = millis();
+            if (reconnectAttempts >= WIFI_RECONNECT_MAX_ATTEMPTS) {
+                // Zu viele Fehlversuche → AP-Mode starten
+                reconnecting      = false;
+                reconnectAttempts = 0;
+                DEBUG_PRINTLN("[WiFi] Reconnect fehlgeschlagen, wechsle zu AP-Mode");
+                WiFi.disconnect(true);
+                delay(100);
+                startApMode();
+            } else {
+                reconnectAttempts++;
+                DEBUG_PRINTF("[WiFi] Reconnect Versuch %d/%d: %s\n",
+                             reconnectAttempts, WIFI_RECONNECT_MAX_ATTEMPTS,
+                             cachedWifiConfig.ssid);
+                WiFi.mode(WIFI_STA);
+                WiFi.begin(cachedWifiConfig.ssid, cachedWifiConfig.password);
+            }
+        }
+    }
+
     // Ohne STA: nach Timeout sicherstellen dass AP läuft
-    if (!staConnected && millis() - connectStartTime > AP_FALLBACK_TIMEOUT_MS) {
+    if (!staConnected && !reconnecting && millis() - connectStartTime > AP_FALLBACK_TIMEOUT_MS) {
         if (!apMode) {
             WiFi.disconnect(true);
             WiFi.mode(WIFI_OFF);

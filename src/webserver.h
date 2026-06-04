@@ -82,7 +82,11 @@ private:
     void (*apModeCb)(bool);
 
     unsigned long connectStartTime;
-    unsigned long apShutdownTime;   // millis() wann AP nach STA-Verbindung abschalten
+    unsigned long apShutdownTime;      // millis() wann AP nach STA-Verbindung abschalten
+    unsigned long lastReconnectMs;     // letzter Reconnect-Versuch
+    uint8_t       reconnectAttempts;   // Anzahl bisheriger Fehlversuche
+    bool          reconnecting;        // Reconnect-Prozess läuft
+    unsigned long apStartMs;           // millis() wann AP-Mode gestartet wurde
 
     void startApMode();
     bool startStaMode();

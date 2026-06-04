@@ -5,14 +5,19 @@
 ## Table of Contents
 
 1. [Overview](#1-overview)
-2. [Display](#2-display)
-3. [First Start – WiFi Setup](#3-first-start--wifi-setup)
-4. [Accessing the Web Interface](#4-accessing-the-web-interface)
-5. [Setting the Tare](#5-setting-the-tare)
-6. [Calibration](#6-calibration)
-7. [Gain Factor](#7-gain-factor)
-8. [MQTT Configuration](#8-mqtt-configuration)
-9. [Temperature Correction](#9-temperature-correction)
+2. [Display Modes](#2-display-modes)
+3. [Button – Yield Measurement and Quick Measurement](#3-button--yield-measurement-and-quick-measurement)
+4. [First Start – WiFi Setup](#4-first-start--wifi-setup)
+5. [WiFi Auto-Reconnect and Reboot](#5-wifi-auto-reconnect-and-reboot)
+6. [Accessing the Web Interface](#6-accessing-the-web-interface)
+7. [Section: Scale](#7-section-scale)
+8. [Section: Parameters](#8-section-parameters)
+   - [8.1 Setting the Tare](#81-setting-the-tare)
+   - [8.2 Calibration](#82-calibration)
+   - [8.3 Gain Factor](#83-gain-factor)
+   - [8.4 Poly2 Temperature Correction (Stage 1)](#84-poly2-temperature-correction-stage-1)
+   - [8.5 PT2 Correction (Stage 2)](#85-pt2-correction-stage-2)
+9. [MQTT Configuration](#9-mqtt-configuration)
 10. [Firmware Update (OTA)](#10-firmware-update-ota)
 11. [Troubleshooting](#11-troubleshooting)
 
@@ -20,7 +25,7 @@
 
 ## 1. Overview
 
-The beehive scale continuously measures the weight of the beehive and the ambient temperature. Values are shown on an LCD display and optionally transmitted via MQTT to a smart-home system (e.g. Home Assistant).
+The beehive scale continuously measures the weight of the hive and ambient temperature. Values are shown on an LCD display and optionally transmitted via MQTT to a smart-home system (e.g. Home Assistant).
 
 **Features at a glance:**
 
@@ -28,36 +33,64 @@ The beehive scale continuously measures the weight of the beehive and the ambien
 |---|---|
 | Weight measurement | HX711 load cell amplifier, ±1 g resolution |
 | Temperature measurement | DS18B20, ±0.5 °C |
-| Temperature correction | Automatic compensation of temperature-induced weight drift |
-| Display | LCD 16×2: temperature + weight |
+| Poly2 T-correction | Compensates temperature-induced weight drift (Stage 1) |
+| PT2 correction | PT2-filtered temperature correction (Stage 2) |
+| Yield measurement | Long-term reference for hive yield, via button or web |
+| Quick measurement | Short-term measurement for placed objects, via button |
+| Display | LCD 16×2 with three display modes |
 | Web interface | Configuration and calibration via browser |
 | MQTT | Data transfer to Home Assistant or other brokers |
 | OTA | Firmware update over WiFi |
+| Auto-reconnect | Automatic reconnection after WiFi loss |
 
 ---
 
-## 2. Display
+## 2. Display Modes
 
-After startup, the LCD shows two lines:
+The display has three modes, switched by the button (D8).
+
+### Normal mode
 
 ```
 T:  18.8 C
    26.547 kg
 ```
 
-| Line | Content |
-|---|---|
-| Line 1 | Current temperature in °C |
-| Line 2 | Current weight in kg (temperature-corrected if active) |
+Line 1: Temperature | Line 2: corrected weight (or yield value if set)
 
-**On power-up**, the IP address is shown for approx. 5 seconds:
+```
+T:  18.8 C
+E: +0.235 kg
+```
+
+When yield measurement is active, line 2 shows the yield value (current weight minus yield base, with sign).
+
+### Quick measurement mode
+
+```
+Schnellmessung
+  +0.567 kg
+```
+
+Updated 2× per second. Shows weight relative to the quick-tare.
+
+### Confirmation mode (setting yield base)
+
+```
+Ertrag tarieren?
+Taste->OK (5s)
+```
+
+Appears after a long button press (≥ 5 s). Press briefly within 5 s to confirm.
+
+**At startup**, the IP address is briefly shown:
 
 ```
 Bienenwaage
 192.168.1.42
 ```
 
-If no WiFi is configured:
+In AP mode:
 
 ```
 Bienenwaage AP
@@ -66,9 +99,38 @@ Bienenwaage AP
 
 ---
 
-## 3. First Start – WiFi Setup
+## 3. Button – Yield Measurement and Quick Measurement
 
-On first startup (no WiFi credentials stored), the device opens its own hotspot:
+A button is connected to **D8 (GPIO15)** with an external **10 kΩ pull-down resistor** to GND. Pressing connects D8 to 3.3 V.
+
+### Quick measurement
+
+| Action | Result |
+|---|---|
+| Short press (< 5 s) | Set quick-tare, start quick measurement |
+| Another short press | End quick measurement |
+
+**Use:** Place an object on the hive → short press → display shows the object's weight relative to the quick-tare.
+
+### Yield measurement
+
+| Action | Result |
+|---|---|
+| Hold ≥ 5 s, then release | Confirmation window opens (5 s) |
+| Short press within window | Set yield base to current weight |
+| No press within window | Cancelled, no change |
+
+**Use:** At the start of the season or after winterisation: long press, then confirm. Line 2 will then show the weight gain since that point.
+
+> **The yield base is stored persistently** and survives power cycles.
+
+> Yield measurement can also be set and reset via the web interface under **Scale**.
+
+---
+
+## 4. First Start – WiFi Setup
+
+On first startup the device opens its own WiFi hotspot:
 
 | Setting | Value |
 |---|---|
@@ -78,204 +140,205 @@ On first startup (no WiFi credentials stored), the device opens its own hotspot:
 
 **Steps:**
 
-1. Connect your smartphone or PC to the `Bienenwaage` WiFi network.
-2. Open a browser and navigate to `192.168.4.1`.
-3. Tap **WiFi** in the navigation menu.
-4. Select your home network from the list, enter the password, click **Connect**.
-5. The device connects to your home network. The new IP address appears on the display and in the browser.
-6. Switch back to your home network and open the displayed IP address in your browser.
+1. Connect smartphone or PC to `Bienenwaage` WiFi.
+2. Open browser → `192.168.4.1`.
+3. Tap **WiFi** → select home network → enter password → **Connect**.
+4. The new IP address appears on the display.
+5. Connect to the home network and open the shown IP in a browser.
 
-> **Tip:** The configuration access point (192.168.4.1) stays active for 2 more minutes while the device is already connected to your home network.
+> **Tip:** The current SSID is pre-filled in the WiFi form. Leave the password field empty to keep the stored password unchanged.
+
+> The configuration hotspot (192.168.4.1) remains accessible for 2 minutes while the device is already on the home network.
 
 ---
 
-## 4. Accessing the Web Interface
+## 5. WiFi Auto-Reconnect and Reboot
 
-The web interface is accessible from any browser on the same network:
+The device automatically tries to restore the connection after a drop:
+
+| Phase | Description |
+|---|---|
+| Connection lost | Immediate first reconnect attempt |
+| Reconnect attempts | Every 30 seconds, up to 10 times |
+| After 10 failures (5 min) | Switch to AP mode (192.168.4.1) |
+| 10 min in AP mode without connection | Automatic reboot |
+
+After reboot the device reconnects to the stored network. If reachable, normal operation resumes. Otherwise the cycle repeats.
+
+---
+
+## 6. Accessing the Web Interface
 
 ```
-http://<IP address>/
+http://<IP-address>/
 ```
 
-The IP address is shown on the display (briefly after startup) or in your router's device list (hostname: `bienenwaage`).
+The IP address appears briefly on the display at startup, or can be found in the router's DHCP table (hostname: `bienenwaage`).
 
 **Navigation:**
 
 | Menu item | Function |
 |---|---|
-| Scale | Details: raw value, offset, calibration factor, tare |
-| Calibration | Calibrate weight and reset to defaults |
-| Gain | Set HX711 amplification factor |
-| T-Correction | Calculate and enable temperature correction |
+| Scale | Measurements (3 weight values), yield measurement set/reset |
+| Parameters | Tare, calibration, gain, Poly2 T-correction, PT2 correction |
 | MQTT | Configure MQTT broker |
-| WiFi | Switch network |
+| WiFi | Change network |
 | OTA | Firmware update |
 
 ---
 
-## 5. Setting the Tare
+## 7. Section: Scale
 
-The tare (zero point) compensates for the dead weight of the hive components.
+The Scale page shows three weight values:
 
-**When to tare:**
-- On first setup, after all hive parts are placed on the scale.
-- After adding or removing hive components.
-- When the displayed weight deviates noticeably from zero without any actual change.
+| Value | Description |
+|---|---|
+| Weight (raw) | Uncompensated measurement |
+| Weight (T-corr.) | After Poly2 temperature correction (Stage 1), `*` when active |
+| Weight (T+PT2-corr.) | After Poly2 + PT2 correction (Stages 1+2), `**` when active |
 
-**Steps:**
+Additionally:
 
-1. Place all hive components on the scale (ideally without bees and honey if you want to track net weight).
-2. Open the web interface → **Scale** → **Set Tare**.
-3. The device stores the current raw value as zero. The display switches to 0.000 kg.
-
-> The tare value is stored permanently and survives power cycles.
-
----
-
-## 6. Calibration
-
-Calibration ensures that the displayed weight matches the actual weight.
-
-**Required:** A known reference weight (e.g. a stone weighed on a calibrated scale beforehand).
-
-**Steps:**
-
-1. The scale must be tared first (see Step 5).
-2. Place the reference weight on the scale.
-3. Open the web interface → **Calibration**.
-4. Enter the known weight in kg (e.g. `5.250`).
-5. Click **Calibrate**.
-6. The new calibration factor is saved and applied immediately.
-
-> **Tip:** Use a reference weight close to the typical hive weight (5–50 kg) for best accuracy.
-
-**Resetting to factory defaults:**
-
-Web interface → **Calibration** → **Reset to Factory Settings** resets calibration factor, offset and gain to defaults.
+- **Yield value**: weight relative to the set yield base
+- **Set yield base now**: sets the current fully-corrected weight as the reference
+- **Reset yield measurement**: deactivates yield measurement
 
 ---
 
-## 7. Gain Factor
+## 8. Section: Parameters
 
-The gain factor determines the input channel and amplification of the HX711.
+All measurement parameters are editable on a single page: **Web interface → Parameters**.
+
+### 8.1 Setting the Tare
+
+Compensates the dead weight of the hive components.
+
+**When to set?** After initial assembly, after adding/removing hive parts, or if the displayed weight deviates significantly from zero without reason.
+
+1. Place all hive components on the scale (without bees/honey if desired).
+2. **Parameters → Set tare**.
+
+> The tare value is stored permanently.
+
+### 8.2 Calibration
+
+**Prerequisite:** Tare set, known reference weight (e.g. 5–20 kg).
+
+1. Place the reference weight on the scale.
+2. **Parameters → enter known weight** (e.g. `5.250`).
+3. Click **Calibrate**.
+
+> Use a weight close to the typical hive weight for best accuracy.
+
+### 8.3 Gain Factor
 
 | Gain | Channel | Recommendation |
 |---|---|---|
-| 128 | A | Default – best resolution (pre-set) |
-| 64 | A | If measurement range is exceeded at Gain 128 |
+| 128 | A | Default – highest resolution (preset) |
+| 64 | A | If overdriven at Gain 128 |
 | 32 | B | Second input (if wired) |
 
-Web interface → **Gain** → select value → **Save**.
+**Parameters → select gain → Save.**
 
-> After changing the gain factor, repeat the calibration.
+> Repeat calibration after changing the gain factor.
+
+### 8.4 Poly2 Temperature Correction (Stage 1)
+
+Corrects temperature-induced weight drift with a 2nd-order polynomial:
+
+```
+correction(T) = a·T² + b·T + c
+Weight (T-corr.) = raw weight − correction(T)
+```
+
+**Enter coefficients manually:** Parameters → Poly2 T-Correction → a, b, c → Save.
+
+**Calculate coefficients from measurement data (recommended):**
+
+1. Record data over a temperature range of ≥ 10 °C (constant weight!).
+2. Export CSV files from Home Assistant (weight + temperature).
+3. **Parameters → CSV Fit Wizard** (links to `/tempcal`).
+4. Upload both CSV files → **Calculate**.
+5. Check R² (aim for > 0.8) → **Save**.
+
+### 8.5 PT2 Correction (Stage 2)
+
+The PT2 correction accounts for thermally slow effects: temperature is first passed through a PT2 low-pass filter, then a Poly2 is applied to the filtered temperature:
+
+```
+T_pt2  = PT2 filter(T, T₂, D)
+correction(T_pt2) = a·T_pt2² + b·T_pt2 + c
+Weight (T+PT2-corr.) = Weight (T-corr.) − correction(T_pt2)
+```
+
+**Parameters:**
+
+| Parameter | Description | Typical value |
+|---|---|---|
+| T₂ (minutes) | PT2 filter time constant | 120–480 min |
+| D (damping) | 0.5 = oscillatory, 0.7 = critically damped, 1.0 = overdamped | 0.7 |
+| a, b, c | Poly2 coefficients for the filtered temperature | from CSV fit |
+
+**Calculate coefficients:**
+
+1. **Parameters → CSV Fit Wizard (PT2)** (links to `/pt2cal`).
+2. Set T₂ and D.
+3. Upload CSV files → **Calculate**.
+4. The browser applies the PT2 filter to the temperature and fits Poly2.
+5. Check R², adjust T₂ if needed → **Save**.
+
+> Stages 1 and 2 can be enabled independently. For most applications Stage 1 (direct Poly2) is sufficient.
 
 ---
 
-## 8. MQTT Configuration
+## 9. MQTT Configuration
 
-MQTT enables data transmission to Home Assistant or other smart-home systems.
+**Prerequisite:** MQTT broker in the network (e.g. Mosquitto).
 
-**Prerequisite:** An MQTT broker on the network (e.g. Mosquitto).
-
-**Steps:**
-
-1. Web interface → **MQTT**.
-2. Fill in the following fields:
+**Web interface → MQTT:**
 
 | Field | Example | Description |
 |---|---|---|
-| Broker | `192.168.1.10` | IP address of the MQTT broker |
-| Port | `1883` | Standard MQTT port |
-| Username | (optional) | If the broker requires authentication |
+| Broker | `192.168.1.10` | Broker IP address |
+| Port | `1883` | Default port |
+| Username | (optional) | Authentication |
 | Password | (optional) | |
-| Client ID | `bienenwaage_01` | Unique device identifier |
-| Topic prefix | `bienenwaage/01` | Prepended to all topics |
-| Publish interval | `60` | Seconds between publications |
+| Client ID | `bienenwaage_01` | Unique device ID |
+| Topic prefix | `bienenwaage/01` | Prefix for all topics |
+| Publish interval | `60` | Seconds |
 | MQTT enabled | Yes | |
-| HA Auto-Discovery | Yes | Sensors are automatically created in Home Assistant |
-
-3. Click **Save**, then restart the device.
+| HA Auto-Discovery | Yes | Auto-create sensors in Home Assistant |
 
 **Published values:**
 
 | Topic | Content |
 |---|---|
 | `.../sensors/weight` | Raw weight in kg |
-| `.../sensors/weight_corrected` | Temperature-corrected weight in kg |
+| `.../sensors/weight_t_corrected` | Weight after Poly2 T-correction (Stage 1) |
+| `.../sensors/weight_corrected` | Weight after T+PT2 correction (Stages 1+2) |
+| `.../sensors/ertragsgewicht` | Yield value in kg (only when yield measurement is active) |
 | `.../sensors/temperature` | Temperature in °C |
 | `.../sensors/trimmedmean` | Trimmed mean weight in kg |
 | `.../sensors/spread` | Standard deviation in kg |
+| `.../sensors/raw` | HX711 raw value |
 | `.../status` | `online` / `offline` |
-
----
-
-## 9. Temperature Correction
-
-Load cells change their reading with temperature. The temperature correction compensates this effect using a 2nd-order polynomial:
-
-```
-corrected_weight = raw_weight − (a·T² + b·T + c)
-```
-
-### 9.1 Recording Data
-
-For a good calibration, data over a **temperature range of at least 10 °C** is needed — e.g. over several days or across a full day-night cycle.
-
-**Important:** The **actual weight must not change** during the recording period (e.g. use an empty hive, or make sure no harvesting or feeding takes place).
-
-### 9.2 Exporting CSV Files from Home Assistant
-
-1. Open Home Assistant → **History**.
-2. Select the desired time period and entity:
-   - Once for weight (`sensor.bienenwaage_..._gewicht`)
-   - Once for temperature (`sensor.bienenwaage_..._temperatur`)
-3. Click the download icon for each → save the CSV file.
-
-### 9.3 Calculating Coefficients
-
-1. Web interface → **T-Correction**.
-2. Select the **Weight CSV** file.
-3. Select the **Temperature CSV** file.
-4. Click **Calculate**.
-5. The result is displayed:
-   - Coefficients a, b, c of the correction polynomial
-   - R² value (goodness of fit – should be > 0.8)
-   - Chart with data points and fitted curve
-6. Choose whether to activate the correction (Yes/No).
-7. Click **Save**.
-
-### 9.4 Checking the Result
-
-After saving, the web interface home page shows both values:
-
-- **Weight (raw):** uncompensated measurement
-- **Weight (corrected) \*:** temperature-compensated value (highlighted green when active)
-
-The corrected weight is also published to MQTT under `.../sensors/weight_corrected`.
-
-> The correction can be toggled on or off at any time on the T-Correction page.
 
 ---
 
 ## 10. Firmware Update (OTA)
 
-The device can be updated over WiFi without removing it from the hive.
-
-**Steps:**
-
-1. Build the new firmware with PlatformIO:
+1. Build the firmware:
    ```
    pio run
    ```
-   The file is located at: `.pio/build/nodemcuv2/firmware.bin`
+   File location: `.pio/build/nodemcuv2/firmware.bin`
 
-2. Web interface → **OTA**.
-3. Click **Choose file** → select `firmware.bin`.
-4. Click **Upload**.
-5. The progress bar shows the upload status.
-6. After a successful update the device restarts automatically.
+2. **Web interface → OTA → Choose file → Upload.**
+3. After a successful update the device restarts automatically.
 
-> **Important:** The device must remain powered and reachable on the WiFi network during the update.
+> Only `firmware.bin` is needed for OTA – not `firmware.elf`.
+
+> Keep the device powered throughout the update.
 
 ---
 
@@ -284,38 +347,40 @@ The device can be updated over WiFi without removing it from the hive.
 ### Display shows nothing
 
 - Check power supply.
-- Check I²C address: default is `0x3F`, some displays use `0x27`. Adjust `LCD_I2C_ADDR` in `src/config.h`.
-- Check wiring: D1 = SDA, D7 = SCL.
+- I²C address: default `0x3F`, some displays use `0x27` (adjust in `src/config.h`).
+- Check SDA/SCL wiring: D1 = SDA, D7 = SCL.
 
-### Weight jumps or is unstable
+### Weight unstable or jumping
 
-- Check HX711 wiring (load cell cables swapped?).
-- Check shielding of load cell cables (see assembly guide).
-- Check buffer capacitors on the HX711.
+- Check HX711 wiring.
 - Reduce gain factor (128 → 64).
-- Re-tare the scale (possible mechanical tension in the construction).
+- Re-set tare.
 
-### No WiFi connection
+### No WiFi – device unreachable
 
-- Check SSID and password.
-- Move device closer to the router and try again.
-- In case of permanent failure: restart device → AP mode opens automatically after 10 minutes without connection.
+- The device retries every 30 s automatically (up to 10 times).
+- After 10 failures it switches to AP mode (`Bienenwaage`, 192.168.4.1).
+- After 10 min in AP mode without connection: **automatic reboot**.
+- Re-enter SSID and password on the WiFi page → **Connect**.
+
+### Yield value missing after reboot
+
+- The yield base is saved in `/ertrag.json` and survives reboots.
+- If still missing: check LittleFS storage (full reconfiguration via `uploadfs`).
+
+### Temperature correction: R² too low (< 0.5)
+
+- Insufficient temperature variation: use a longer time period (≥ 10 °C range).
+- Weight changed during recording: record a new dataset.
+- For PT2: adjust T₂ and recalculate.
 
 ### MQTT connection fails
 
 - Check broker IP and port.
-- Ensure broker and device are on the same network.
-- Check broker logs for authentication errors.
-- Client ID must be unique (no other device connected with the same ID).
+- Device and broker must be on the same network.
+- Client ID must be unique.
 
-### Temperature correction: R² too low (< 0.5)
+### Button not responding
 
-- Not enough temperature variation in the data: choose a longer time period.
-- Weight changed during recording (feeding, harvesting): record a new dataset.
-- Too few data points: reduce the recording interval.
-
-### Device no longer reachable via WiFi
-
-- Check the router's DHCP table (IP address may have changed).
-- Restart the device: briefly disconnect power.
-- If the web interface is no longer accessible: after 10 minutes without connection, the device opens the AP hotspot again.
+- External 10 kΩ pull-down resistor required between D8 (GPIO15) and GND.
+- Button connects D8 to 3.3 V when pressed.
